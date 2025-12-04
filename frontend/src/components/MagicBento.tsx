@@ -541,6 +541,64 @@ const MagicBento = ({
             } as React.CSSProperties
           };
 
+          // Special rendering for upload card with buttons
+          if (card.label === "Packet Intake") {
+            const uploadCardContent = (
+              <div className="magic-bento-card__content packet-intake-content">
+                <div className="file-preview-box">
+                  <svg className="file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+                    <polyline points="13 2 13 9 20 9" />
+                  </svg>
+                  <p>Drop .pcap or hex payload</p>
+                </div>
+                <div className="packet-intake-buttons">
+                  <div className="button-group">
+                    <button className="packet-btn packet-btn--upload">
+                      Upload Packet
+                    </button>
+                    <p className="button-description">Drop .pcap / hex payloads or connect live capture.</p>
+                  </div>
+                  <div className="button-group">
+                    <button className="packet-btn packet-btn--generate">
+                      <span>+</span> Generate Packet
+                    </button>
+                    <p className="button-description">Create synthetic packets for testing.</p>
+                  </div>
+                </div>
+              </div>
+            );
+
+            if (enableStars) {
+              return (
+                <ParticleCard
+                  key={card.label}
+                  {...cardProps}
+                  disableAnimations={shouldDisableAnimations}
+                  particleCount={particleCount}
+                  glowColor={glowColor}
+                  enableTilt={enableTilt}
+                  clickEffect={clickEffect}
+                  enableMagnetism={enableMagnetism}
+                >
+                  <div className="magic-bento-card__header">
+                    <div className="magic-bento-card__label">{card.label}</div>
+                  </div>
+                  {uploadCardContent}
+                </ParticleCard>
+              );
+            }
+
+            return (
+              <div key={card.label} {...cardProps}>
+                <div className="magic-bento-card__header">
+                  <div className="magic-bento-card__label">{card.label}</div>
+                </div>
+                {uploadCardContent}
+              </div>
+            );
+          }
+
           if (enableStars) {
             return (
               <ParticleCard

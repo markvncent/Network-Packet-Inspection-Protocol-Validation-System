@@ -45,11 +45,11 @@
 
 .magic-bento-wrapper .card-grid {
   display: grid;
-  grid-template-columns: minmax(280px, 1fr) minmax(420px, 2fr);
-  grid-template-rows: repeat(2, minmax(190px, auto));
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: auto auto;
   grid-template-areas:
-    "upload visualization"
-    "controls visualization";
+    "upload controls"
+    "visualization visualization";
   gap: 1rem;
   padding: 0.5rem;
 }
@@ -86,7 +86,7 @@
 
 .magic-bento-card--visualization {
   grid-area: visualization;
-  min-height: 400px;
+  min-height: 500px;
 }
 
 .magic-bento-card__header,
@@ -213,6 +213,145 @@
   .magic-bento-wrapper .card-grid {
     padding: 0;
     gap: 0.75rem;
+  }
+}
+
+/* Packet Intake Button Styles */
+.packet-intake-content {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: stretch;
+  height: 100%;
+  gap: 1.5rem;
+}
+
+.file-preview-box {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.5rem;
+  border: 2px dashed rgba(168, 85, 247, 0.4);
+  border-radius: 0.75rem;
+  color: #cbd5f5;
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.file-preview-box:hover {
+  border-color: rgba(168, 85, 247, 0.7);
+  background: rgba(168, 85, 247, 0.08);
+}
+
+.file-icon {
+  width: 40px;
+  height: 40px;
+  color: #a855f7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.file-preview-box p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #a8adc5;
+}
+
+.packet-intake-buttons {
+  display: flex;
+  flex-direction: row;
+  gap: 1rem;
+  width: 100%;
+}
+
+.button-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 1;
+}
+
+.packet-btn {
+  padding: 0.875rem 1.5rem;
+  border-radius: 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  border: 1px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  position: relative;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.packet-btn--upload {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.1) 0%, rgba(132, 0, 255, 0.05) 100%);
+  border: 1.5px solid rgba(168, 85, 247, 0.5);
+  color: #a855f7;
+}
+
+.packet-btn--upload:hover {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.25) 0%, rgba(132, 0, 255, 0.15) 100%);
+  border-color: rgba(168, 85, 247, 0.8);
+  box-shadow: 0 0 20px rgba(168, 85, 247, 0.4), inset 0 0 20px rgba(168, 85, 247, 0.1);
+  transform: translateY(-2px);
+}
+
+.packet-btn--generate {
+  background: linear-gradient(135deg, rgba(132, 0, 255, 0.1) 0%, rgba(168, 85, 247, 0.05) 100%);
+  border: 1.5px solid rgba(132, 0, 255, 0.5);
+  color: #a855f7;
+}
+
+.packet-btn--generate:hover {
+  background: linear-gradient(135deg, rgba(132, 0, 255, 0.25) 0%, rgba(168, 85, 247, 0.15) 100%);
+  border-color: rgba(132, 0, 255, 0.8);
+  box-shadow: 0 0 20px rgba(132, 0, 255, 0.4), inset 0 0 20px rgba(132, 0, 255, 0.1);
+  transform: translateY(-2px);
+}
+
+.packet-btn--generate span {
+  font-size: 1.1em;
+  font-weight: bold;
+}
+
+.packet-btn:active {
+  transform: translateY(0);
+}
+
+.button-description {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #a8adc5;
+  line-height: 1.4;
+}
+
+@media (max-width: 768px) {
+  .packet-intake-buttons {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .packet-btn {
+    padding: 0.75rem 1.25rem;
+    font-size: 0.8rem;
+  }
+
+  .file-preview-box {
+    padding: 1.25rem;
+  }
+
+  .file-icon {
+    width: 36px;
+    height: 36px;
   }
 }
 
