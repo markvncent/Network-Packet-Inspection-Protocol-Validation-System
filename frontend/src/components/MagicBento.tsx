@@ -1,6 +1,7 @@
 import { useRef, useEffect, useCallback, useState } from "react";
 import { gsap } from "gsap";
 import PacketGeneratorModal from "./PacketGenerator";
+import ResultsView from "./ResultsView";
 import "./MagicBento.css";
 
 const DEFAULT_PARTICLE_COUNT = 12;
@@ -689,8 +690,12 @@ const MagicBento = ({
                     </div>
                   </div>
                   <div className="inspection-language">
-                    <span className="language-label">Language:</span>
-                    <span className="language-value">DFA (Deterministic Finite Automaton)</span>
+                    <span className="language-label">Engine:</span>
+                    <span className="language-value">CNF Pattern Grammar + DFA</span>
+                  </div>
+                  <div className="inspection-details">
+                    <span className="detail-item">Malicious Signatures: 15+</span>
+                    <span className="detail-item">Detects: SQLi, XSS, RCE, Exploits</span>
                   </div>
                 </div>
 
@@ -763,6 +768,50 @@ const MagicBento = ({
                   <div className="magic-bento-card__label">{card.label}</div>
                 </div>
                 {controlsCardContent}
+              </div>
+            );
+          }
+
+          if (card.label === "Result View") {
+            const resultsContent = (
+              <div className="magic-bento-card__content results-view-container">
+                <ResultsView 
+                  payload={uploadedFile ? uploadedFile.name : "No packet loaded"}
+                  validationResults={undefined}
+                  onReInspect={() => {
+                    setDfaStatus('idle');
+                    setPdaStatus('idle');
+                  }}
+                />
+              </div>
+            );
+
+            if (enableStars) {
+              return (
+                <ParticleCard
+                  key={card.label}
+                  {...cardProps}
+                  disableAnimations={shouldDisableAnimations}
+                  particleCount={particleCount}
+                  glowColor={glowColor}
+                  enableTilt={enableTilt}
+                  clickEffect={clickEffect}
+                  enableMagnetism={enableMagnetism}
+                >
+                  <div className="magic-bento-card__header">
+                    <div className="magic-bento-card__label">{card.label}</div>
+                  </div>
+                  {resultsContent}
+                </ParticleCard>
+              );
+            }
+
+            return (
+              <div key={card.label} {...cardProps}>
+                <div className="magic-bento-card__header">
+                  <div className="magic-bento-card__label">{card.label}</div>
+                </div>
+                {resultsContent}
               </div>
             );
           }
