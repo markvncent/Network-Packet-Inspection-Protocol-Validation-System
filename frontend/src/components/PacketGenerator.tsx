@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { generatePacket, exportPacketAsHex, exportPacketAsText, GeneratedPacket } from '../utils/packetGenerator';
+import { generatePacket, exportPacketAsHex, exportPacketAsText, exportPacketAsPcap, GeneratedPacket } from '../utils/packetGenerator';
 import './PacketGenerator.css';
 
 interface PacketGeneratorModalProps {
@@ -9,7 +9,6 @@ interface PacketGeneratorModalProps {
 
 export const PacketGeneratorModal = ({ isOpen, onClose }: PacketGeneratorModalProps) => {
   const [packetType, setPacketType] = useState<'benign' | 'malicious'>('benign');
-  const [protocol, setProtocol] = useState<'http' | 'tcp' | 'dns'>('http');
   const [generatedPacket, setGeneratedPacket] = useState<GeneratedPacket | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -19,8 +18,7 @@ export const PacketGeneratorModal = ({ isOpen, onClose }: PacketGeneratorModalPr
     // Simulate generation delay for visual effect
     setTimeout(() => {
       const packet = generatePacket({
-        type: packetType,
-        protocol
+        type: packetType
       });
       setGeneratedPacket(packet);
       setIsGenerating(false);
@@ -29,6 +27,19 @@ export const PacketGeneratorModal = ({ isOpen, onClose }: PacketGeneratorModalPr
         logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
       }, 100);
     }, 500);
+  };
+
+  const handleDownloadPcap = () => {
+    if (!generatedPacket) return;
+
+    const pcapBase64 = exportPacketAsPcap(generatedPacket);
+    const element = document.createElement('a');
+    element.setAttribute('href', 'data:application/octet-stream;base64,' + pcapBase64);
+    element.setAttribute('download', `packet_${generatedPacket.type}_${Date.now()}.pcap`);
+    element.style.display = 'none';
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
   };
 
   const handleDownloadHex = () => {
@@ -63,7 +74,7 @@ export const PacketGeneratorModal = ({ isOpen, onClose }: PacketGeneratorModalPr
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Generate Test Packet</h2>
+          <h2>Generate HTTP PCAP Packet</h2>
           <button className="modal-close" onClick={onClose}>✕</button>
         </div>
 
@@ -72,17 +83,8 @@ export const PacketGeneratorModal = ({ isOpen, onClose }: PacketGeneratorModalPr
             <div className="control-group">
               <label>Packet Type</label>
               <select value={packetType} onChange={e => setPacketType(e.target.value as 'benign' | 'malicious')}>
-                <option value="benign">Benign (Normal Traffic)</option>
-                <option value="malicious">Malicious (Attack Pattern)</option>
-              </select>
-            </div>
-
-            <div className="control-group">
-              <label>Protocol</label>
-              <select value={protocol} onChange={e => setProtocol(e.target.value as 'http' | 'tcp' | 'dns')}>
-                <option value="http">HTTP</option>
-                <option value="tcp">TCP</option>
-                <option value="dns">DNS</option>
+                <option value="benign">Benign (Normal HTTP Traffic)</option>
+                <option value="malicious">Malicious (HTTP with Attack Patterns)</option>
               </select>
             </div>
 
@@ -91,7 +93,7 @@ export const PacketGeneratorModal = ({ isOpen, onClose }: PacketGeneratorModalPr
               onClick={handleGenerate}
               disabled={isGenerating}
             >
-              {isGenerating ? 'Generating...' : 'Generate Packet'}
+              {isGenerating ? 'Generating...' : 'Generate PCAP Packet'}
             </button>
           </div>
 
@@ -150,6 +152,9 @@ export const PacketGeneratorModal = ({ isOpen, onClose }: PacketGeneratorModalPr
               </div>
 
               <div className="download-buttons">
+                <button className="download-btn pcap" onClick={handleDownloadPcap}>
+                  ↓ Download as .pcap
+                </button>
                 <button className="download-btn hex" onClick={handleDownloadHex}>
                   ↓ Download as .hex
                 </button>

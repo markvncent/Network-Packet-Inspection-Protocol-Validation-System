@@ -5,17 +5,15 @@
 
 export interface PacketGeneratorOptions {
   type: 'benign' | 'malicious';
-  protocol?: 'http' | 'tcp' | 'dns';
-  payloadSize?: number;
-  includeAnomalies?: boolean;
 }
 
 export interface GeneratedPacket {
   timestamp: string;
   type: 'benign' | 'malicious';
-  protocol: string;
+  protocol: 'HTTP';
   rawHex: string;
   payload: string;
+  pcapBase64: string;
   metadata: {
     sourceIP: string;
     destIP: string;
@@ -234,20 +232,46 @@ const generateMaliciousDNS = (
 };
 
 /**
- * Main packet generation function
+ * Generate PCAP file header (global header)
+ */
+const generatePcapGlobalHeader = (): string => {
+  // PCAP global header (24 bytes)
+  // Magic: 0xa1b2c3d4 (big-endian)
+  // Version: 2.4
+  // Snaplen: 65535, Network: 1 (Ethernet)
+  return 'a1b2c3d400020004000000000000000000ffff000001000000';
+};
+
+/**
+ * Generate PCAP packet header (per packet)
+ */
+const generatePcapPacketHeader = (payloadLength: number): string => {
+  const timestamp = Math.floor(Date.now() / 1000);
+  const microseconds = Math.floor(Math.random() * 1000000);
+  
+  const tsSeconds = timestamp.toString(16).padStart(8, '0');
+  const tsMicros = microseconds.toString(16).padStart(8, '0');
+  const inclLen = (payloadLength).toString(16).padStart(8, '0');
+  const origLen = (payloadLength).toString(16).padStart(8, '0');
+  
+  return tsSeconds + tsMicros + inclLen + origLen;
+};
+
+/**
+ * Main packet generation function - generates HTTP PCAP packets
  */
 export const generatePacket = (options: PacketGeneratorOptions): GeneratedPacket => {
   const log: string[] = [];
   const timestamp = new Date().toISOString();
 
-  log.push(`=== Packet Generation Started at ${timestamp} ===`);
-  log.push(`Type: ${options.type}, Protocol: ${options.protocol || 'HTTP'}`);
+  log.push(`=== PCAP Packet Generation Started at ${timestamp} ===`);
+  log.push(`Type: ${options.type}, Protocol: HTTP`);
+  log.push(`Output Format: PCAP (Packet Capture)`);
 
-  const protocol = options.protocol || 'http';
   const sourceIP = generateIP();
   const destIP = generateIP();
   const sourcePort = generatePort();
-  const destPort = protocol === 'http' ? 80 : protocol === 'dns' ? 53 : generatePort();
+  const destPort = 80; // HTTP port
 
   log.push(`\n--- Network Layer ---`);
   log.push(`Source IP: ${sourceIP}`);
@@ -261,57 +285,64 @@ export const generatePacket = (options: PacketGeneratorOptions): GeneratedPacket
   const tcpHeader = generateTCPHeader(flags);
   log.push(`TCP Header (hex): ${tcpHeader.substring(0, 32)}...`);
 
-  log.push(`\n--- Payload Generation ---`);
+  log.push(`\n--- HTTP Payload Generation ---`);
 
-  let rawHex = tcpHeader;
   let payload: string;
   let anomalies: string[] = [];
 
-  if (protocol === 'http') {
-    if (options.type === 'benign') {
-      const result = generateBenignHTTP(log);
-      rawHex += result.hex;
-      payload = result.payload;
-    } else {
-      const result = generateMaliciousHTTP(log);
-      rawHex += result.hex;
-      payload = result.payload;
-      anomalies = result.anomalies;
-    }
-  } else if (protocol === 'dns') {
-    if (options.type === 'benign') {
-      const result = generateBenignDNS(log);
-      rawHex += result.hex;
-      payload = result.payload;
-    } else {
-      const result = generateMaliciousDNS(log);
-      rawHex += result.hex;
-      payload = result.payload;
-      anomalies = result.anomalies;
-    }
-  } else {
-    // Default to HTTP
+  if (options.type === 'benign') {
     const result = generateBenignHTTP(log);
-    rawHex += result.hex;
     payload = result.payload;
+  } else {
+    const result = generateMaliciousHTTP(log);
+    payload = result.payload;
+    anomalies = result.anomalies;
   }
+
+  // Construct full packet: TCP + HTTP payload
+  const rawHex = tcpHeader + Array.from(payload)
+    .map(c => c.charCodeAt(0).toString(16).padStart(2, '0'))
+    .join('');
+
+  // Build PCAP file
+  const pcapGlobalHeader = generatePcapGlobalHeader();
+  const pcapPacketHeader = generatePcapPacketHeader(rawHex.length / 2);
+  const pcapFileContent = pcapGlobalHeader + pcapPacketHeader + rawHex;
+
+  // Convert to base64 for file download
+  let pcapBase64 = '';
+  try {
+    // Convert hex string to bytes, then to base64
+    const bytes = new Uint8Array(pcapFileContent.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16)));
+    pcapBase64 = btoa(String.fromCharCode(...bytes));
+  } catch (e) {
+    log.push(`Warning: Could not generate PCAP base64: ${e}`);
+    pcapBase64 = '';
+  }
+
+  log.push(`\n--- PCAP Generation ---`);
+  log.push(`PCAP Global Header: ${pcapGlobalHeader.substring(0, 16)}...`);
+  log.push(`PCAP Packet Header: ${pcapPacketHeader}`);
+  log.push(`Total PCAP file size: ${(pcapFileContent.length / 2)} bytes`);
 
   log.push(`\n--- Summary ---`);
   log.push(`Total packet size: ${rawHex.length / 2} bytes`);
+  log.push(`Protocol: HTTP (Port 80)`);
   if (anomalies.length > 0) {
     log.push(`Anomalies detected: ${anomalies.length}`);
     anomalies.forEach(a => log.push(`  • ${a}`));
   } else {
     log.push(`No anomalies detected`);
   }
-  log.push(`=== Packet Generation Complete ===`);
+  log.push(`=== PCAP Packet Generation Complete ===`);
 
   return {
     timestamp,
     type: options.type,
-    protocol,
+    protocol: 'HTTP',
     rawHex,
     payload,
+    pcapBase64,
     metadata: {
       sourceIP,
       destIP,
@@ -322,6 +353,13 @@ export const generatePacket = (options: PacketGeneratorOptions): GeneratedPacket
     },
     generationLog: log
   };
+};
+
+/**
+ * Export packet as PCAP file content (base64 encoded)
+ */
+export const exportPacketAsPcap = (packet: GeneratedPacket): string => {
+  return packet.pcapBase64;
 };
 
 /**
