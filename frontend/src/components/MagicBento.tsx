@@ -2,6 +2,7 @@ import { useRef, useEffect, useCallback, useState } from "react";
 import { gsap } from "gsap";
 import PacketGeneratorModal from "./PacketGenerator";
 import ResultsView from "./ResultsView";
+import { inspectPacket, readPacketFile, PacketInspectionResult } from "../utils/dfaPacketInspection";
 import "./MagicBento.css";
 
 const DEFAULT_PARTICLE_COUNT = 12;
@@ -511,6 +512,8 @@ const MagicBento = ({
   const [isGeneratorOpen, setIsGeneratorOpen] = useState(false);
   const [dfaStatus, setDfaStatus] = useState<'idle' | 'inspecting' | 'approved' | 'malicious'>('idle');
   const [pdaStatus, setPdaStatus] = useState<'idle' | 'inspecting' | 'approved' | 'malicious'>('idle');
+  const [packetPayload, setPacketPayload] = useState<string>('');
+  const [inspectionResult, setInspectionResult] = useState<PacketInspectionResult | undefined>();
 
   const handleUploadClick = () => {
     fileInputRef.current?.click();
@@ -526,8 +529,6 @@ const MagicBento = ({
       if (isPcap || isHexPayload) {
         setUploadedFile(file);
         console.log('File uploaded:', file.name, file.size, 'bytes');
-        // Here you can add logic to process the file
-        // For example: send it to backend, parse it, etc.
       } else {
         alert('Please upload a .pcap, .pcapng, .hex, or .txt file');
         setUploadedFile(null);
@@ -535,12 +536,29 @@ const MagicBento = ({
     }
   };
 
-  const handleDfaInspection = () => {
+  const handleDfaInspection = async () => {
+    if (!uploadedFile) {
+      alert('Please upload a packet file first');
+      return;
+    }
+
     setDfaStatus('inspecting');
-    // Simulate inspection process
-    setTimeout(() => {
-      setDfaStatus(Math.random() > 0.5 ? 'approved' : 'malicious');
-    }, 2000);
+    try {
+      // Read the file contents
+      const fileContent = await readPacketFile(uploadedFile);
+      setPacketPayload(fileContent);
+
+      // Run packet inspection (auto-detects benign vs malicious)
+      const result = inspectPacket(fileContent);
+      setInspectionResult(result);
+
+      // Update status based on classification
+      setDfaStatus(result.isValid ? 'approved' : 'malicious');
+    } catch (error) {
+      console.error('Inspection error:', error);
+      alert('Error inspecting packet: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      setDfaStatus('idle');
+    }
   };
 
   const handlePdaValidation = () => {
@@ -776,11 +794,13 @@ const MagicBento = ({
             const resultsContent = (
               <div className="magic-bento-card__content results-view-container">
                 <ResultsView 
-                  payload={uploadedFile ? uploadedFile.name : "No packet loaded"}
-                  validationResults={undefined}
+                  payload={packetPayload}
+                  inspectionResult={inspectionResult}
                   onReInspect={() => {
                     setDfaStatus('idle');
                     setPdaStatus('idle');
+                    setInspectionResult(undefined);
+                    setPacketPayload('');
                   }}
                 />
               </div>
