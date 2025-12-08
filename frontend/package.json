@@ -9,12 +9,17 @@
     "lint": "eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
+    "d3": "^7.8.5",
+    "d3-force": "^3.0.0",
+    "d3-hierarchy": "^3.1.2",
     "gsap": "^3.13.0",
     "ogl": "^1.0.11",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@types/d3": "^7.4.0",
+    "@types/d3-hierarchy": "^3.1.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react-swc": "^3.7.1",

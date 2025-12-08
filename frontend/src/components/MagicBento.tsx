@@ -1,8 +1,6 @@
 import { useRef, useEffect, useCallback, useState } from "react";
 import { gsap } from "gsap";
 import PacketGeneratorModal from "./PacketGenerator";
-import ResultsView from "./ResultsView";
-import { inspectPacket, readPacketFile, PacketInspectionResult } from "../utils/dfaPacketInspection";
 import "./MagicBento.css";
 
 const DEFAULT_PARTICLE_COUNT = 12;
@@ -512,8 +510,6 @@ const MagicBento = ({
   const [isGeneratorOpen, setIsGeneratorOpen] = useState(false);
   const [dfaStatus, setDfaStatus] = useState<'idle' | 'inspecting' | 'approved' | 'malicious'>('idle');
   const [pdaStatus, setPdaStatus] = useState<'idle' | 'inspecting' | 'approved' | 'malicious'>('idle');
-  const [packetPayload, setPacketPayload] = useState<string>('');
-  const [inspectionResult, setInspectionResult] = useState<PacketInspectionResult | undefined>();
 
   const handleUploadClick = () => {
     fileInputRef.current?.click();
@@ -529,6 +525,8 @@ const MagicBento = ({
       if (isPcap || isHexPayload) {
         setUploadedFile(file);
         console.log('File uploaded:', file.name, file.size, 'bytes');
+        // Here you can add logic to process the file
+        // For example: send it to backend, parse it, etc.
       } else {
         alert('Please upload a .pcap, .pcapng, .hex, or .txt file');
         setUploadedFile(null);
@@ -536,29 +534,12 @@ const MagicBento = ({
     }
   };
 
-  const handleDfaInspection = async () => {
-    if (!uploadedFile) {
-      alert('Please upload a packet file first');
-      return;
-    }
-
+  const handleDfaInspection = () => {
     setDfaStatus('inspecting');
-    try {
-      // Read the file contents
-      const fileContent = await readPacketFile(uploadedFile);
-      setPacketPayload(fileContent);
-
-      // Run packet inspection (auto-detects benign vs malicious)
-      const result = inspectPacket(fileContent);
-      setInspectionResult(result);
-
-      // Update status based on classification
-      setDfaStatus(result.isValid ? 'approved' : 'malicious');
-    } catch (error) {
-      console.error('Inspection error:', error);
-      alert('Error inspecting packet: ' + (error instanceof Error ? error.message : 'Unknown error'));
-      setDfaStatus('idle');
-    }
+    // Simulate inspection process
+    setTimeout(() => {
+      setDfaStatus(Math.random() > 0.5 ? 'approved' : 'malicious');
+    }, 2000);
   };
 
   const handlePdaValidation = () => {
@@ -573,8 +554,8 @@ const MagicBento = ({
     <section className="magic-bento-wrapper">
       <header className="magic-bento-header">
         <div>
-          <p className="magic-bento-eyebrow">CS311: AUTOMATA THEORY & FORMAL LANGUAGES</p>
-          <h1>Network Packet Inspection & HTTP Protocol Validation</h1>
+          <p className="magic-bento-eyebrow">Automata Network Protocol Inspector</p>
+          <h1>Packet Inspection & HTTP PDA Validation</h1>
           <p className="magic-bento-subtitle">
             Upload packets, trigger DFA matching + PDA validation, and visualize the automata traversal results.
           </p>
@@ -708,12 +689,8 @@ const MagicBento = ({
                     </div>
                   </div>
                   <div className="inspection-language">
-                    <span className="language-label">Engine:</span>
-                    <span className="language-value">CNF Pattern Grammar + DFA</span>
-                  </div>
-                  <div className="inspection-details">
-                    <span className="detail-item">Malicious Signatures: 15+</span>
-                    <span className="detail-item">Detects: SQLi, XSS, RCE, Exploits</span>
+                    <span className="language-label">Language:</span>
+                    <span className="language-value">DFA (Deterministic Finite Automaton)</span>
                   </div>
                 </div>
 
@@ -786,52 +763,6 @@ const MagicBento = ({
                   <div className="magic-bento-card__label">{card.label}</div>
                 </div>
                 {controlsCardContent}
-              </div>
-            );
-          }
-
-          if (card.label === "Result View") {
-            const resultsContent = (
-              <div className="magic-bento-card__content results-view-container">
-                <ResultsView 
-                  payload={packetPayload}
-                  inspectionResult={inspectionResult}
-                  onReInspect={() => {
-                    setDfaStatus('idle');
-                    setPdaStatus('idle');
-                    setInspectionResult(undefined);
-                    setPacketPayload('');
-                  }}
-                />
-              </div>
-            );
-
-            if (enableStars) {
-              return (
-                <ParticleCard
-                  key={card.label}
-                  {...cardProps}
-                  disableAnimations={shouldDisableAnimations}
-                  particleCount={particleCount}
-                  glowColor={glowColor}
-                  enableTilt={enableTilt}
-                  clickEffect={clickEffect}
-                  enableMagnetism={enableMagnetism}
-                >
-                  <div className="magic-bento-card__header">
-                    <div className="magic-bento-card__label">{card.label}</div>
-                  </div>
-                  {resultsContent}
-                </ParticleCard>
-              );
-            }
-
-            return (
-              <div key={card.label} {...cardProps}>
-                <div className="magic-bento-card__header">
-                  <div className="magic-bento-card__label">{card.label}</div>
-                </div>
-                {resultsContent}
               </div>
             );
           }

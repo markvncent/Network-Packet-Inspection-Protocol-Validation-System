@@ -1,0 +1,34 @@
+{
+  "malware": [
+    "virus",
+    "malware",
+    "exploit",
+    "ransom",
+    "trojan",
+    "backdoor",
+    "rootkit"
+  ],
+  "xss": [
+    "<script",
+    "</script",
+    "<iframe",
+    "eval",
+    "base64"
+  ],
+  "sql": [
+    "' OR 1",
+    "UNION SELECT",
+    "DROP TABLE"
+  ],
+  "phishing": [
+    "login",
+    "verify",
+    "password",
+    "account"
+  ],
+  "cmd": [
+    ";r",
+    "&&w",
+    "|b"
+  ]
+}

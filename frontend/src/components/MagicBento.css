@@ -520,24 +520,6 @@
   font-weight: 500;
 }
 
-/* Inspection Details */
-.inspection-details {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  padding: 0.5rem 0.75rem;
-  background: rgba(59, 130, 246, 0.05);
-  border-left: 2px solid rgba(59, 130, 246, 0.4);
-  border-radius: 0.4rem;
-}
-
-.detail-item {
-  font-size: 0.75rem;
-  color: #a0aec0;
-  font-weight: 500;
-  line-height: 1.3;
-}
-
 @media (max-width: 768px) {
   .inspection-control-header {
     gap: 0.75rem;
@@ -570,28 +552,6 @@
   .language-value {
     font-size: 0.8rem;
   }
-
-  .inspection-details {
-    padding: 0.4rem 0.6rem;
-  }
-
-  .detail-item {
-    font-size: 0.7rem;
-  }
-}
-
-/* Results View Container */
-.results-view-container {
-  padding: 0;
-  background: transparent;
-  border: none;
-}
-
-.results-view-container .results-view {
-  background: transparent;
-  border: none;
-  padding: 0;
-  gap: 1rem;
 }
 
 
