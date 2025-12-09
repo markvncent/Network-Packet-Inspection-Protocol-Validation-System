@@ -2,6 +2,11 @@ import { useRef, useEffect, useCallback, useState } from "react";
 import { gsap } from "gsap";
 import PacketGeneratorModal from "./PacketGenerator";
 import HexView from './HexView';
+import ResultViewTabs, { ResultViewTab } from './ResultViewTabs';
+import ProtocolValidationVisualizer, { ProtocolValidationState } from './ProtocolValidationVisualizer';
+import DfaVisualizer from './DFAVisualizer';
+import AcTrieVisualizer from './AcTrieVisualizer';
+import PDAVisualizer from './PDAVisualizer';
 import "./MagicBento.css";
 
 const DEFAULT_PARTICLE_COUNT = 12;
@@ -528,6 +533,18 @@ const MagicBento = ({
   const [payloadBytes, setPayloadBytes] = useState<Uint8Array | null>(null);
   const [matchedPatterns, setMatchedPatterns] = useState<Array<{ pattern: string; position: number }>>([]);
   const [packetInfo, setPacketInfo] = useState<any>(null);
+  
+  // Result View tab state
+  const [activeResultTab, setActiveResultTab] = useState<ResultViewTab>('hex');
+  
+  // Protocol validation state
+  const [protocolValidationState, setProtocolValidationState] = useState<ProtocolValidationState>({
+    status: 'idle'
+  });
+  
+  // PDA data state
+  const [pdaData, setPdaData] = useState<any>(null);
+  const [pdaStackState, setPdaStackState] = useState<string[]>([]);
 
   // Hex view sizing (compute after payload state is available)
   const bytesPerLine = 16;
@@ -693,6 +710,8 @@ const MagicBento = ({
     setMatchedPatterns([]);
     setHighlightedPositions([]);
     runACSimulation();
+    // Switch to DFA tab when inspection starts
+    setActiveResultTab('dfa');
   };
 
   function runACSimulation() {
@@ -809,9 +828,65 @@ const MagicBento = ({
 
   const handlePdaValidation = () => {
     setPdaStatus('inspecting');
-    // Simulate validation process
+    setPdaData(demoPdaData);
+    setPdaStackState(['Z']);
+    setProtocolValidationState({
+      status: 'validating',
+      protocol: packetInfo?.protocol || 'HTTP',
+      validationSteps: [
+        { id: 'header', name: 'Header Validation', status: 'running' },
+        { id: 'syntax', name: 'Syntax Check', status: 'pending' },
+        { id: 'semantics', name: 'Semantic Validation', status: 'pending' },
+        { id: 'security', name: 'Security Checks', status: 'pending' }
+      ]
+    });
+    // Switch to PDA tab when validation starts
+    setActiveResultTab('pda');
+    
+    // Simulate validation process with step-by-step updates
+    const steps = [
+      { id: 'header', name: 'Header Validation', status: 'passed' as const, message: 'HTTP headers are valid' },
+      { id: 'syntax', name: 'Syntax Check', status: 'running' as const }
+    ];
+    
     setTimeout(() => {
-      setPdaStatus(Math.random() > 0.5 ? 'approved' : 'malicious');
+      setProtocolValidationState(prev => ({
+        ...prev,
+        validationSteps: [
+          ...steps,
+          { id: 'syntax', name: 'Syntax Check', status: 'passed', message: 'Request syntax is correct' },
+          { id: 'semantics', name: 'Semantic Validation', status: 'running' }
+        ]
+      }));
+    }, 800);
+    
+    setTimeout(() => {
+      const isValid = Math.random() > 0.5;
+      const finalStatus = isValid ? 'valid' : 'invalid';
+      setPdaStatus(isValid ? 'approved' : 'malicious');
+      
+      setProtocolValidationState({
+        status: finalStatus,
+        protocol: packetInfo?.protocol || 'HTTP',
+        validationSteps: [
+          { id: 'header', name: 'Header Validation', status: 'passed', message: 'HTTP headers are valid' },
+          { id: 'syntax', name: 'Syntax Check', status: 'passed', message: 'Request syntax is correct' },
+          { id: 'semantics', name: 'Semantic Validation', status: isValid ? 'passed' : 'failed', message: isValid ? 'Semantic rules satisfied' : 'Semantic validation failed' },
+          { id: 'security', name: 'Security Checks', status: isValid ? 'passed' : 'failed', message: isValid ? 'No security issues detected' : 'Security vulnerabilities found' }
+        ],
+        errors: isValid ? undefined : [
+          { id: 'err1', step: 'Semantic Validation', message: 'Invalid request structure', severity: 'error' },
+          { id: 'err2', step: 'Security Checks', message: 'Potential injection detected', severity: 'error' }
+        ],
+        warnings: isValid ? undefined : [
+          { id: 'warn1', step: 'Header Validation', message: 'Unusual header detected', severity: 'warning' }
+        ]
+      });
+      
+      // Switch to protocol tab if validation completes
+      if (finalStatus === 'invalid') {
+        setActiveResultTab('protocol');
+      }
     }, 2000);
   };
 
@@ -837,6 +912,20 @@ const MagicBento = ({
       { from: 0, input: 'h', to: 1 },
       { from: 1, input: 'e', to: 2 }
     ]
+  };
+
+  // Demo PDA data for HTTP validation
+  const demoPdaData = {
+    states: ['q0', 'q1', 'q2', 'q3'],
+    start: 'q0',
+    accept: ['q3'],
+    transitions: [
+      { from: 'q0', to: 'q1', input: 'GET', push: 'S' },
+      { from: 'q1', to: 'q2', input: '/', pop: 'S', push: 'P' },
+      { from: 'q2', to: 'q2', input: 'HTTP', pop: 'P' },
+      { from: 'q2', to: 'q3', input: '1.1', pop: 'P' }
+    ],
+    stackSymbols: ['S', 'P', 'Z']
   };
 
   return (
@@ -1113,9 +1202,60 @@ const MagicBento = ({
                   <p className="magic-bento-card__description">{card.description}</p>
                   {card.label === 'Result View' && (
                     <div className="result-visualizations" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.75rem' }}>
-                      <div style={{ minHeight: computedHexHeight, transition: 'min-height 200ms ease', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem' }}>
-                        <HexView payloadHex={payloadHex} payloadAscii={payloadAscii} highlightedPositions={highlightedPositions} matchedPatterns={matchedPatterns} />
-                      </div>
+                      <ResultViewTabs
+                        activeTab={activeResultTab}
+                        onTabChange={setActiveResultTab}
+                        hexViewCount={payloadHex ? Math.ceil(payloadHex.length / 2) : 0}
+                        protocolValidationCount={protocolValidationState.errors?.length || 0}
+                        dfaMatchCount={matchedPatterns.length}
+                        pdaValidationCount={pdaStatus === 'malicious' ? 1 : 0}
+                      />
+                      {activeResultTab === 'hex' && (
+                        <div style={{ minHeight: computedHexHeight, transition: 'min-height 200ms ease', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem' }}>
+                          <HexView payloadHex={payloadHex} payloadAscii={payloadAscii} highlightedPositions={highlightedPositions} matchedPatterns={matchedPatterns} />
+                        </div>
+                      )}
+                      {activeResultTab === 'protocol' && (
+                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem' }}>
+                          <ProtocolValidationVisualizer
+                            validationState={protocolValidationState}
+                            packetInfo={packetInfo}
+                            onStepClick={(stepId) => {
+                              console.log('Step clicked:', stepId);
+                            }}
+                          />
+                        </div>
+                      )}
+                      {activeResultTab === 'dfa' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '0.5rem', minHeight: '400px' }}>
+                          <DfaVisualizer
+                            dfaData={demoDfaData}
+                            activeState={dfaActiveState}
+                            highlightedPath={dfaHighlightedPath}
+                            onStateClick={(stateId) => {
+                              console.log('DFA state clicked:', stateId);
+                            }}
+                          />
+                          <AcTrieVisualizer
+                            trieData={activeTrieData || demoTrieData}
+                            highlightedNodeId={trieHighlightedNode}
+                            animatedEdges={trieAnimatedEdges}
+                          />
+                        </div>
+                      )}
+                      {activeResultTab === 'pda' && (
+                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem', minHeight: '400px' }}>
+                          <PDAVisualizer
+                            pdaData={pdaData || demoPdaData}
+                            activeState={pdaStatus === 'inspecting' ? 'q1' : undefined}
+                            highlightedPath={pdaStatus === 'malicious' ? ['q0', 'q1', 'q2'] : []}
+                            stackState={pdaStackState}
+                            onStateClick={(stateId) => {
+                              console.log('PDA state clicked:', stateId);
+                            }}
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1133,9 +1273,60 @@ const MagicBento = ({
                 <p className="magic-bento-card__description">{card.description}</p>
                 {card.label === 'Result View' && (
                   <div className="result-visualizations" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.75rem' }}>
-                    <div style={{ minHeight: computedHexHeight, transition: 'min-height 200ms ease', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem' }}>
-                      <HexView payloadHex={payloadHex} payloadAscii={payloadAscii} highlightedPositions={highlightedPositions} matchedPatterns={matchedPatterns} />
-                    </div>
+                    <ResultViewTabs
+                      activeTab={activeResultTab}
+                      onTabChange={setActiveResultTab}
+                      hexViewCount={payloadHex ? Math.ceil(payloadHex.length / 2) : 0}
+                      protocolValidationCount={protocolValidationState.errors?.length || 0}
+                      dfaMatchCount={matchedPatterns.length}
+                      pdaValidationCount={pdaStatus === 'malicious' ? 1 : 0}
+                    />
+                    {activeResultTab === 'hex' && (
+                      <div style={{ minHeight: computedHexHeight, transition: 'min-height 200ms ease', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem' }}>
+                        <HexView payloadHex={payloadHex} payloadAscii={payloadAscii} highlightedPositions={highlightedPositions} matchedPatterns={matchedPatterns} />
+                      </div>
+                    )}
+                    {activeResultTab === 'protocol' && (
+                      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem' }}>
+                        <ProtocolValidationVisualizer
+                          validationState={protocolValidationState}
+                          packetInfo={packetInfo}
+                          onStepClick={(stepId) => {
+                            console.log('Step clicked:', stepId);
+                          }}
+                        />
+                      </div>
+                    )}
+                    {activeResultTab === 'dfa' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '0.5rem', minHeight: '400px' }}>
+                        <DfaVisualizer
+                          dfaData={demoDfaData}
+                          activeState={dfaActiveState}
+                          highlightedPath={dfaHighlightedPath}
+                          onStateClick={(stateId) => {
+                            console.log('DFA state clicked:', stateId);
+                          }}
+                        />
+                        <AcTrieVisualizer
+                          trieData={activeTrieData || demoTrieData}
+                          highlightedNodeId={trieHighlightedNode}
+                          animatedEdges={trieAnimatedEdges}
+                        />
+                      </div>
+                    )}
+                    {activeResultTab === 'pda' && (
+                      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem', minHeight: '400px' }}>
+                        <PDAVisualizer
+                          pdaData={pdaData || demoPdaData}
+                          activeState={pdaStatus === 'inspecting' ? 'q1' : undefined}
+                          highlightedPath={pdaStatus === 'malicious' ? ['q0', 'q1', 'q2'] : []}
+                          stackState={pdaStackState}
+                          onStateClick={(stateId) => {
+                            console.log('PDA state clicked:', stateId);
+                          }}
+                        />
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
