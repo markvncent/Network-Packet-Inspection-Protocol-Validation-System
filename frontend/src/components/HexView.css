@@ -50,7 +50,7 @@
 .hex-view__content {
   flex: 1;
   overflow-y: auto;
-  max-height: 400px;
+  max-height: 80vh;
   padding: 0.5rem;
 }
 

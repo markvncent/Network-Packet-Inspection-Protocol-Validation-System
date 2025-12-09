@@ -1,6 +1,7 @@
 import { useRef, useEffect, useCallback, useState } from "react";
 import { gsap } from "gsap";
 import PacketGeneratorModal from "./PacketGenerator";
+import HexView from './HexView';
 import "./MagicBento.css";
 
 const DEFAULT_PARTICLE_COUNT = 12;
@@ -425,7 +426,7 @@ const GlobalSpotlight = ({
 
     const handleMouseLeave = () => {
       gridRef.current?.querySelectorAll(".magic-bento-card").forEach(card => {
-        card.style.setProperty("--glow-intensity", "0");
+        (card as HTMLElement).style.setProperty("--glow-intensity", "0");
       });
       if (spotlightRef.current) {
         gsap.to(spotlightRef.current, {
@@ -510,6 +511,167 @@ const MagicBento = ({
   const [isGeneratorOpen, setIsGeneratorOpen] = useState(false);
   const [dfaStatus, setDfaStatus] = useState<'idle' | 'inspecting' | 'approved' | 'malicious'>('idle');
   const [pdaStatus, setPdaStatus] = useState<'idle' | 'inspecting' | 'approved' | 'malicious'>('idle');
+  const [dfaActiveState, setDfaActiveState] = useState<string | undefined>(undefined);
+  const [dfaHighlightedPath, setDfaHighlightedPath] = useState<string[]>([]);
+  const [dfaAnimatedEdges, setDfaAnimatedEdges] = useState<Array<{ from: string; to: string }>>([]);
+
+  const [trieHighlightedNode, setTrieHighlightedNode] = useState<number | undefined>(undefined);
+  const [trieAnimatedEdges, setTrieAnimatedEdges] = useState<Array<{ from: number; to: number }>>([]);
+
+  const simTimersRef = useRef<number[]>([]);
+  const [activeTrieData, setActiveTrieData] = useState<any | null>(null);
+  const [highlightedPositions, setHighlightedPositions] = useState<number[]>([]);
+
+  // Payload / parsing state
+  const [payloadHex, setPayloadHex] = useState<string>('');
+  const [payloadAscii, setPayloadAscii] = useState<string>('');
+  const [payloadBytes, setPayloadBytes] = useState<Uint8Array | null>(null);
+  const [matchedPatterns, setMatchedPatterns] = useState<Array<{ pattern: string; position: number }>>([]);
+  const [packetInfo, setPacketInfo] = useState<any>(null);
+
+  // Hex view sizing (compute after payload state is available)
+  const bytesPerLine = 16;
+  const maxHexViewHeight = 400; // px
+  const minHexViewHeight = 80; // px
+  const payloadByteCount = payloadHex ? Math.ceil(payloadHex.length / 2) : (payloadBytes ? payloadBytes.length : 0);
+  const hexLineCount = Math.max(1, Math.ceil(payloadByteCount / bytesPerLine));
+  const computedHexHeight = Math.min(maxHexViewHeight, Math.max(minHexViewHeight, 24 + hexLineCount * 32));
+
+  // Basic pattern set — replaceable with a fetch to /patterns
+  const maliciousPatterns = [
+    'virus', 'malware', 'exploit', 'ransom', 'trojan', 'backdoor', 'rootkit',
+    '<script', '</script', '<iframe', 'eval', 'base64',
+    "' OR 1", 'UNION SELECT', 'DROP TABLE',
+    'login', 'verify', 'password', 'account',
+    ';r', '&&w', '|b'
+  ];
+
+  // Build a simple Aho-Corasick automaton (trie with fail links)
+  function buildAC(patterns: string[]) {
+    const nodes: any[] = [{ edges: new Map<string, number>(), fail: 0, output: [] }];
+
+    for (const pat of patterns) {
+      let node = 0;
+      for (const ch of pat) {
+        const key = ch;
+        const nxt = nodes[node].edges.get(key);
+        if (nxt === undefined) {
+          nodes.push({ edges: new Map<string, number>(), fail: 0, output: [] });
+          const newIdx = nodes.length - 1;
+          nodes[node].edges.set(key, newIdx);
+          node = newIdx;
+        } else {
+          node = nxt;
+        }
+      }
+      nodes[node].output.push(pat);
+    }
+
+    // failure links
+    const q: number[] = [];
+    for (const [k, v] of nodes[0].edges) {
+      nodes[v].fail = 0;
+      q.push(v);
+    }
+    while (q.length) {
+      const r = q.shift()!;
+      for (const [a, s] of nodes[r].edges) {
+        q.push(s);
+        let state = nodes[r].fail;
+        while (state !== 0 && !nodes[state].edges.has(a)) {
+          state = nodes[state].fail;
+        }
+        if (nodes[state].edges.has(a)) {
+          nodes[s].fail = nodes[state].edges.get(a)!;
+        } else {
+          nodes[s].fail = 0;
+        }
+        nodes[s].output = nodes[s].output.concat(nodes[nodes[s].fail].output || []);
+      }
+    }
+
+    const trieNodes = nodes.map((n, idx) => ({ id: idx, fail: n.fail ?? 0, output: n.output || [] }));
+    const trieEdges: any[] = [];
+    nodes.forEach((n, idx) => {
+      for (const [k, v] of n.edges) trieEdges.push({ from: idx, input: k, to: v });
+    });
+    return { nodes: trieNodes, edges: trieEdges, rawNodes: nodes };
+  }
+
+  async function parseFile(file: File) {
+    const name = file.name.toLowerCase();
+    try {
+      if (name.endsWith('.hex') || name.endsWith('.txt')) {
+        const text = await file.text();
+        const hex = text.replace(/[^0-9a-fA-F]/g, '');
+        const bytes = new Uint8Array(hex.match(/.{1,2}/g)?.map(h => parseInt(h, 16)) || []);
+        const ascii = Array.from(bytes).map(b => (b >= 32 && b <= 126 ? String.fromCharCode(b) : '.')).join('');
+        setPayloadHex(Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(''));
+        setPayloadAscii(ascii);
+        setPayloadBytes(bytes);
+        setPacketInfo({ filename: file.name, length: bytes.length, protocol: 'raw' });
+        return;
+      }
+
+      if (name.endsWith('.pcap') || name.endsWith('.pcapng')) {
+        const ab = await file.arrayBuffer();
+        const dv = new DataView(ab);
+        // naive pcap: skip 24-byte global header, read first packet's incl_len
+        if (dv.byteLength >= 24 + 16) {
+          const offset = 24;
+          const inclLen = dv.getUint32(offset + 8, true);
+          const pktStart = offset + 16;
+          const pktEnd = Math.min(pktStart + inclLen, dv.byteLength);
+          const pkt = new Uint8Array(ab.slice(pktStart, pktEnd));
+
+          let payloadOffset = 0;
+          if (pkt.length >= 14) {
+            const etherType = (pkt[12] << 8) | pkt[13];
+            if (etherType === 0x0800 && pkt.length >= 14 + 20) {
+              const ipHeaderStart = 14;
+              const ihl = (pkt[ipHeaderStart] & 0x0f) * 4;
+              const protocol = pkt[ipHeaderStart + 9];
+              const srcIP = pkt.slice(ipHeaderStart + 12, ipHeaderStart + 16).join('.');
+              const dstIP = pkt.slice(ipHeaderStart + 16, ipHeaderStart + 20).join('.');
+              if (protocol === 6 && pkt.length >= 14 + ihl + 20) {
+                const tcpStart = 14 + ihl;
+                const dataOffset = ((pkt[tcpStart + 12] & 0xf0) >> 4) * 4;
+                payloadOffset = 14 + ihl + dataOffset;
+                setPacketInfo({ srcIP, dstIP, protocol: 'TCP', length: pkt.length });
+              } else if (protocol === 17) {
+                const udpStart = 14 + ihl;
+                payloadOffset = udpStart + 8;
+                setPacketInfo({ srcIP, dstIP, protocol: 'UDP', length: pkt.length });
+              } else {
+                payloadOffset = 14 + ihl;
+                setPacketInfo({ srcIP, dstIP, protocol: `IP/${protocol}`, length: pkt.length });
+              }
+            } else {
+              payloadOffset = 0;
+              setPacketInfo({ filename: file.name, length: pkt.length, protocol: 'unknown' });
+            }
+          }
+
+          const payload = pkt.slice(payloadOffset);
+          setPayloadBytes(payload);
+          setPayloadHex(Array.from(payload).map(b => b.toString(16).padStart(2, '0')).join(''));
+          setPayloadAscii(Array.from(payload).map(b => (b >= 32 && b <= 126 ? String.fromCharCode(b) : '.')).join(''));
+          return;
+        }
+      }
+
+      // fallback: text
+      const text = await file.text();
+      const enc = new TextEncoder();
+      const bytes = enc.encode(text);
+      setPayloadBytes(bytes);
+      setPayloadHex(Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(''));
+      setPayloadAscii(Array.from(bytes).map(b => (b >= 32 && b <= 126 ? String.fromCharCode(b) : '.')).join(''));
+      setPacketInfo({ filename: file.name, length: bytes.length, protocol: 'text' });
+    } catch (err) {
+      console.warn('parseFile error', err);
+    }
+  }
 
   const handleUploadClick = () => {
     fileInputRef.current?.click();
@@ -518,29 +680,132 @@ const MagicBento = ({
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      const fileName = file.name.toLowerCase();
-      const isPcap = fileName.endsWith('.pcap') || fileName.endsWith('.pcapng');
-      const isHexPayload = fileName.endsWith('.hex') || fileName.endsWith('.txt');
-      
-      if (isPcap || isHexPayload) {
-        setUploadedFile(file);
-        console.log('File uploaded:', file.name, file.size, 'bytes');
-        // Here you can add logic to process the file
-        // For example: send it to backend, parse it, etc.
-      } else {
-        alert('Please upload a .pcap, .pcapng, .hex, or .txt file');
-        setUploadedFile(null);
-      }
+      setUploadedFile(file);
+      console.log('File uploaded:', file.name, file.size, 'bytes');
+      parseFile(file).catch(err => console.warn('parse failed', err));
     }
   };
 
   const handleDfaInspection = () => {
+    // Run AC-based traversal animation over the uploaded payload
     setDfaStatus('inspecting');
-    // Simulate inspection process
-    setTimeout(() => {
-      setDfaStatus(Math.random() > 0.5 ? 'approved' : 'malicious');
-    }, 2000);
+    clearSimulationTimers();
+    setMatchedPatterns([]);
+    setHighlightedPositions([]);
+    runACSimulation();
   };
+
+  function runACSimulation() {
+    if (!payloadBytes || payloadBytes.length === 0) {
+      setDfaStatus('approved');
+      return;
+    }
+
+    // build lowercase patterns for case-insensitive matching
+    const pats = maliciousPatterns.map(p => p.toLowerCase());
+    const ac = buildAC(pats);
+    setActiveTrieData({ nodes: ac.nodes, edges: ac.edges });
+
+    const raw = ac.rawNodes; // array with edges Map, fail, output
+    let state = 0;
+    let i = 0;
+    const matches: Array<{ pattern: string; position: number }> = [];
+
+    const intervalId = window.setInterval(() => {
+      if (i >= payloadBytes.length) {
+        window.clearInterval(intervalId);
+        if (matches.length > 0) {
+          setDfaStatus('malicious');
+          setMatchedPatterns(matches);
+        } else {
+          setDfaStatus('approved');
+        }
+        return;
+      }
+
+      const b = payloadBytes[i];
+      const ch = String.fromCharCode(b).toLowerCase();
+      let prev = state;
+
+      // follow transitions with fail links
+      while (state !== 0 && !raw[state].edges.has(ch)) {
+        state = raw[state].fail;
+      }
+      if (raw[state].edges.has(ch)) state = raw[state].edges.get(ch);
+
+      // highlight node and edge in visualizer
+      setTrieHighlightedNode(state);
+      setTrieAnimatedEdges([{ from: prev, to: state }]);
+
+      // highlight current byte
+      setHighlightedPositions([i]);
+
+      // check outputs
+      if (raw[state].output && raw[state].output.length > 0) {
+        for (const pat of raw[state].output) {
+          const pos = i - pat.length + 1;
+          matches.push({ pattern: pat, position: Math.max(0, pos) });
+        }
+        // stop on first match and mark malicious
+        setMatchedPatterns(matches);
+        setDfaStatus('malicious');
+        window.clearInterval(intervalId);
+        return;
+      }
+
+      i += 1;
+    }, 120);
+
+    simTimersRef.current.push(intervalId);
+  }
+
+  function clearSimulationTimers() {
+    simTimersRef.current.forEach((id) => window.clearInterval(id));
+    simTimersRef.current = [];
+  }
+
+  function runInspectionSimulation(dfaData: any, trieData: any, forceApproved = false) {
+    // Reset visual states
+    setDfaActiveState(dfaData.start);
+    setDfaHighlightedPath([dfaData.start]);
+    setDfaAnimatedEdges([]);
+    setTrieHighlightedNode(undefined);
+    setTrieAnimatedEdges([]);
+
+    // Simple DFA traversal simulation: step through transitions in order
+    let step = 0;
+    const steps = dfaData.transitions.length;
+
+    const intervalId = window.setInterval(() => {
+      const t = dfaData.transitions[step];
+      if (!t) return;
+
+      // highlight edge and target state
+      setDfaAnimatedEdges([{ from: t.from, to: t.to }]);
+      setDfaActiveState(t.to);
+      setDfaHighlightedPath((prev) => [...prev, t.to]);
+
+      // mimic trie traversal: map transition index to node ids if available
+      const trieEdge = trieData.edges[step];
+      if (trieEdge) {
+        setTrieAnimatedEdges([{ from: trieEdge.from, to: trieEdge.to }]);
+        setTrieHighlightedNode(trieEdge.to);
+      }
+
+      step += 1;
+      if (step >= steps) {
+        window.clearInterval(intervalId);
+        // final decision
+        const finalState = dfaData.transitions[steps - 1]?.to || dfaData.start;
+        const isAccepting = dfaData.accept.includes(finalState);
+        const result = forceApproved ? 'approved' : isAccepting ? 'malicious' : 'approved';
+        // if accepting means match found (malicious) for our demo DFA
+        setTimeout(() => setDfaStatus(result as any), 300);
+      }
+    }, 700);
+
+    simTimersRef.current.push(intervalId);
+  }
 
   const handlePdaValidation = () => {
     setPdaStatus('inspecting');
@@ -548,6 +813,30 @@ const MagicBento = ({
     setTimeout(() => {
       setPdaStatus(Math.random() > 0.5 ? 'approved' : 'malicious');
     }, 2000);
+  };
+
+  // Demo visualization data so the Result View shows something by default
+  const demoDfaData = {
+    states: ['S', 'A', 'B'],
+    start: 'S',
+    accept: ['B'],
+    transitions: [
+      { from: 'S', to: 'A', input: 'a' },
+      { from: 'A', to: 'B', input: 'b' },
+      { from: 'B', to: 'B', input: 'b' }
+    ]
+  };
+
+  const demoTrieData = {
+    nodes: [
+      { id: 0, fail: 0, output: [] },
+      { id: 1, fail: 0, output: [] },
+      { id: 2, fail: 0, output: ['he'] }
+    ],
+    edges: [
+      { from: 0, input: 'h', to: 1 },
+      { from: 1, input: 'e', to: 2 }
+    ]
   };
 
   return (
@@ -596,26 +885,63 @@ const MagicBento = ({
                   onChange={handleFileChange}
                   style={{ display: 'none' }}
                 />
-                <div className="file-preview-box">
-                  <svg className="file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
-                    <polyline points="13 2 13 9 20 9" />
-                  </svg>
-                  <p>{uploadedFile ? uploadedFile.name : 'Drop .pcap or hex payload'}</p>
+                
+                {/* File Preview Section - Moved to top */}
+                <div className="file-preview-container">
+                  <div className="file-preview">
+                    {uploadedFile ? (
+                      <div className="file-preview-content">
+                        <div className="file-preview-placeholder">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                            <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                            <polyline points="14 2 14 8 20 8" />
+                            <line x1="16" y1="13" x2="8" y2="13" />
+                            <line x1="16" y1="17" x2="8" y2="17" />
+                            <polyline points="10 9 9 9 8 9" />
+                          </svg>
+                          <div className="file-info">
+                            <p className="file-name">{uploadedFile.name}</p>
+                            <p className="file-size">{(uploadedFile.size / 1024).toFixed(2)} KB</p>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="file-preview-placeholder">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                          <polyline points="17 8 12 3 7 8" />
+                          <line x1="12" y1="3" x2="12" y2="15" />
+                        </svg>
+                        <p>No file selected</p>
+                        <p className="text-xs mt-2 text-gray-400">Upload a PCAP file or generate a packet to begin</p>
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="packet-intake-buttons">
-                  <div className="button-group">
-                    <button className="packet-btn packet-btn--upload" onClick={handleUploadClick}>
-                      Upload Packet
-                    </button>
-                    <p className="button-description">Drop .pcap / hex payloads or connect live capture.</p>
-                  </div>
-                  <div className="button-group">
-                    <button className="packet-btn packet-btn--generate" onClick={() => setIsGeneratorOpen(true)}>
-                      <span>+</span> Generate Packet
-                    </button>
-                    <p className="button-description">Create synthetic packets for testing.</p>
-                  </div>
+
+                {/* Buttons Section - Moved to bottom */}
+                <div className="packet-buttons-container">
+                  <button 
+                    className="packet-btn packet-btn--upload" 
+                    onClick={handleUploadClick}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                      <polyline points="17 8 12 3 7 8"></polyline>
+                      <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                    Upload PCAP/Hex
+                  </button>
+                  
+                  <button 
+                    className="packet-btn packet-btn--generate" 
+                    onClick={() => setIsGeneratorOpen(true)}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 5v14M5 12h14"></path>
+                    </svg>
+                    Generate Packet
+                  </button>
                 </div>
               </div>
             );
@@ -661,32 +987,32 @@ const MagicBento = ({
                       disabled={dfaStatus === 'inspecting'}
                       title="Run DFA-based malicious packet detection"
                     >
-                      Packet Inspection
+                      <span>Payload Inspection</span>
+                      <div className={`status-indicator status-${dfaStatus}`}>
+                        {dfaStatus === 'idle' && (
+                          <svg className="status-icon" viewBox="0 0 24 24" fill="currentColor">
+                            <circle cx="12" cy="12" r="3" opacity="0.5" />
+                          </svg>
+                        )}
+                        {dfaStatus === 'inspecting' && (
+                          <svg className="status-icon status-icon--spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <circle cx="12" cy="12" r="9" />
+                            <path d="M12 3v9" strokeLinecap="round" />
+                          </svg>
+                        )}
+                        {dfaStatus === 'approved' && (
+                          <svg className="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        )}
+                        {dfaStatus === 'malicious' && (
+                          <svg className="status-icon" viewBox="0 0 24 24" fill="currentColor">
+                            <circle cx="12" cy="12" r="10" />
+                            <text x="12" y="16" textAnchor="middle" fill="white" fontSize="14" fontWeight="bold">!</text>
+                          </svg>
+                        )}
+                      </div>
                     </button>
-                    <div className={`status-indicator status-${dfaStatus}`}>
-                      {dfaStatus === 'idle' && (
-                        <svg className="status-icon" viewBox="0 0 24 24" fill="currentColor">
-                          <circle cx="12" cy="12" r="3" opacity="0.5" />
-                        </svg>
-                      )}
-                      {dfaStatus === 'inspecting' && (
-                        <svg className="status-icon status-icon--spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <circle cx="12" cy="12" r="9" />
-                          <path d="M12 3v9" strokeLinecap="round" />
-                        </svg>
-                      )}
-                      {dfaStatus === 'approved' && (
-                        <svg className="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                          <polyline points="20 6 9 17 4 12" />
-                        </svg>
-                      )}
-                      {dfaStatus === 'malicious' && (
-                        <svg className="status-icon" viewBox="0 0 24 24" fill="currentColor">
-                          <circle cx="12" cy="12" r="10" />
-                          <text x="12" y="16" textAnchor="middle" fill="white" fontSize="14" fontWeight="bold">!</text>
-                        </svg>
-                      )}
-                    </div>
                   </div>
                   <div className="inspection-language">
                     <span className="language-label">Language:</span>
@@ -702,32 +1028,32 @@ const MagicBento = ({
                       disabled={pdaStatus === 'inspecting'}
                       title="Run HTTP PDA protocol validation"
                     >
-                      Protocol Validation
+                      <span>Protocol Validation</span>
+                      <div className={`status-indicator status-${pdaStatus}`}>
+                        {pdaStatus === 'idle' && (
+                          <svg className="status-icon" viewBox="0 0 24 24" fill="currentColor">
+                            <circle cx="12" cy="12" r="3" opacity="0.5" />
+                          </svg>
+                        )}
+                        {pdaStatus === 'inspecting' && (
+                          <svg className="status-icon status-icon--spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <circle cx="12" cy="12" r="9" />
+                            <path d="M12 3v9" strokeLinecap="round" />
+                          </svg>
+                        )}
+                        {pdaStatus === 'approved' && (
+                          <svg className="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        )}
+                        {pdaStatus === 'malicious' && (
+                          <svg className="status-icon" viewBox="0 0 24 24" fill="currentColor">
+                            <circle cx="12" cy="12" r="10" />
+                            <text x="12" y="16" textAnchor="middle" fill="white" fontSize="14" fontWeight="bold">!</text>
+                          </svg>
+                        )}
+                      </div>
                     </button>
-                    <div className={`status-indicator status-${pdaStatus}`}>
-                      {pdaStatus === 'idle' && (
-                        <svg className="status-icon" viewBox="0 0 24 24" fill="currentColor">
-                          <circle cx="12" cy="12" r="3" opacity="0.5" />
-                        </svg>
-                      )}
-                      {pdaStatus === 'inspecting' && (
-                        <svg className="status-icon status-icon--spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <circle cx="12" cy="12" r="9" />
-                          <path d="M12 3v9" strokeLinecap="round" />
-                        </svg>
-                      )}
-                      {pdaStatus === 'approved' && (
-                        <svg className="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                          <polyline points="20 6 9 17 4 12" />
-                        </svg>
-                      )}
-                      {pdaStatus === 'malicious' && (
-                        <svg className="status-icon" viewBox="0 0 24 24" fill="currentColor">
-                          <circle cx="12" cy="12" r="10" />
-                          <text x="12" y="16" textAnchor="middle" fill="white" fontSize="14" fontWeight="bold">!</text>
-                        </svg>
-                      )}
-                    </div>
                   </div>
                   <div className="inspection-language">
                     <span className="language-label">Language:</span>
@@ -785,6 +1111,13 @@ const MagicBento = ({
                 <div className="magic-bento-card__content">
                   <h2 className="magic-bento-card__title">{card.title}</h2>
                   <p className="magic-bento-card__description">{card.description}</p>
+                  {card.label === 'Result View' && (
+                    <div className="result-visualizations" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.75rem' }}>
+                      <div style={{ minHeight: computedHexHeight, transition: 'min-height 200ms ease', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem' }}>
+                        <HexView payloadHex={payloadHex} payloadAscii={payloadAscii} highlightedPositions={highlightedPositions} matchedPatterns={matchedPatterns} />
+                      </div>
+                    </div>
+                  )}
                 </div>
               </ParticleCard>
             );
@@ -798,6 +1131,13 @@ const MagicBento = ({
               <div className="magic-bento-card__content">
                 <h2 className="magic-bento-card__title">{card.title}</h2>
                 <p className="magic-bento-card__description">{card.description}</p>
+                {card.label === 'Result View' && (
+                  <div className="result-visualizations" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.75rem' }}>
+                    <div style={{ minHeight: computedHexHeight, transition: 'min-height 200ms ease', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem' }}>
+                      <HexView payloadHex={payloadHex} payloadAscii={payloadAscii} highlightedPositions={highlightedPositions} matchedPatterns={matchedPatterns} />
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           );

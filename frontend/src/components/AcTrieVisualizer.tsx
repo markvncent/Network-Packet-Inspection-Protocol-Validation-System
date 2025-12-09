@@ -39,25 +39,56 @@ const AcTrieVisualizer: React.FC<AcTrieVisualizerProps> = ({
   const svgRef = useRef<SVGSVGElement>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+
+  // Measure container and re-render on resize so the visualization fits its box
+  useEffect(() => {
+    function measure() {
+      if (!svgRef.current) return;
+      const parent = svgRef.current.parentElement as HTMLElement | null;
+      const w = parent?.clientWidth || svgRef.current.clientWidth || 400;
+      const h = parent?.clientHeight || svgRef.current.clientHeight || 300;
+      setDimensions({ width: w, height: h });
+    }
+
+    measure();
+
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && svgRef.current?.parentElement) {
+      ro = new ResizeObserver(measure);
+      ro.observe(svgRef.current.parentElement);
+    } else {
+      window.addEventListener('resize', measure);
+    }
+
+    return () => {
+      if (ro && svgRef.current?.parentElement) ro.unobserve(svgRef.current.parentElement);
+      window.removeEventListener('resize', measure);
+    };
+  }, []);
 
   useEffect(() => {
-    if (!trieData || !svgRef.current) {
+    if (!trieData || !svgRef.current || dimensions.width === 0 || dimensions.height === 0) {
       setLoading(false);
       return;
     }
 
     try {
-      const width = svgRef.current.clientWidth;
-      const height = svgRef.current.clientHeight;
+      const width = dimensions.width;
+      const height = dimensions.height;
 
       // Build graph structure from nodes and edges
       const nodeMap = new Map(trieData.nodes.map((n) => [n.id, n]));
       const nodeArray = Array.from(nodeMap.values());
 
-      // Clear previous content
+      // Clear previous content and set svg sizing so drawing scales to container
       d3.select(svgRef.current).selectAll('*').remove();
 
-      const svg = d3.select(svgRef.current);
+      const svg = d3.select(svgRef.current)
+        .attr('width', width)
+        .attr('height', height)
+        .attr('viewBox', `0 0 ${width} ${height}`)
+        .attr('preserveAspectRatio', 'xMidYMid meet');
       const g = svg.append('g');
 
       // Create a tree layout (simple hierarchy based on BFS)
@@ -85,21 +116,21 @@ const AcTrieVisualizer: React.FC<AcTrieVisualizerProps> = ({
         .attr('class', 'fail-link')
         .attr('x1', (d: TrieNode) => {
           const desc = root.descendants().find((x: any) => x.data.id === d.id);
-          return desc ? desc.x : 0;
+          return desc ? (desc.x as number) : 0;
         })
         .attr('y1', (d: TrieNode) => {
           const desc = root.descendants().find((x: any) => x.data.id === d.id);
-          return desc ? desc.y : 0;
+          return desc ? (desc.y as number) : 0;
         })
         .attr('x2', (d: TrieNode) => {
           const failNode = nodeMap.get(d.fail);
           const desc = root.descendants().find((x: any) => x.data.id === failNode?.id);
-          return desc ? desc.x : 0;
+          return desc ? (desc.x as number) : 0;
         })
         .attr('y2', (d: TrieNode) => {
           const failNode = nodeMap.get(d.fail);
           const desc = root.descendants().find((x: any) => x.data.id === failNode?.id);
-          return desc ? desc.y : 0;
+          return desc ? (desc.y as number) : 0;
         });
 
       // Draw trie edges

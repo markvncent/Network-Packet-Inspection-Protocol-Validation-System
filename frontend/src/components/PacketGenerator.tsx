@@ -101,53 +101,18 @@ export const PacketGeneratorModal = ({ isOpen, onClose }: PacketGeneratorModalPr
             <div className="packet-results">
               <div className="results-header">
                 <h3>Generated Packet</h3>
-                <span className={`packet-badge ${generatedPacket.type}`}>
-                  {generatedPacket.type.toUpperCase()}
-                </span>
               </div>
 
               <div className="packet-info">
-                <div className="info-row">
-                  <span className="label">Timestamp:</span>
-                  <span className="value">{generatedPacket.timestamp}</span>
-                </div>
                 <div className="info-row">
                   <span className="label">Protocol:</span>
                   <span className="value">{generatedPacket.protocol.toUpperCase()}</span>
                 </div>
                 <div className="info-row">
-                  <span className="label">Source:</span>
-                  <span className="value">{generatedPacket.metadata.sourceIP}:{generatedPacket.metadata.sourcePort}</span>
-                </div>
-                <div className="info-row">
-                  <span className="label">Destination:</span>
-                  <span className="value">{generatedPacket.metadata.destIP}:{generatedPacket.metadata.destPort}</span>
-                </div>
-                <div className="info-row">
-                  <span className="label">Size:</span>
-                  <span className="value">{generatedPacket.rawHex.length / 2} bytes</span>
-                </div>
-                {generatedPacket.metadata.anomalies && generatedPacket.metadata.anomalies.length > 0 && (
-                  <div className="info-row anomalies">
-                    <span className="label">Anomalies:</span>
-                    <ul className="anomaly-list">
-                      {generatedPacket.metadata.anomalies.map((anomaly, idx) => (
-                        <li key={idx}>{anomaly}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-
-              <div className="generation-log">
-                <h4>Generation Process Log</h4>
-                <div className="log-content">
-                  {generatedPacket.generationLog.map((line, idx) => (
-                    <div key={idx} className="log-line">
-                      {line}
-                    </div>
-                  ))}
-                  <div ref={logEndRef} />
+                  <span className="label">Payload:</span>
+                  <span className="value" style={{ wordBreak: 'break-all', fontFamily: 'monospace', fontSize: '0.85rem' }}>
+                    {generatedPacket.payload}
+                  </span>
                 </div>
               </div>
 
