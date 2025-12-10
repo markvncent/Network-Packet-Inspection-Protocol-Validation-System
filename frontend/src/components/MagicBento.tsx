@@ -2,11 +2,9 @@ import { useRef, useEffect, useCallback, useState } from "react";
 import { gsap } from "gsap";
 import PacketGeneratorModal from "./PacketGenerator";
 import HexView from './HexView';
-import ResultViewTabs, { ResultViewTab } from './ResultViewTabs';
-import ProtocolValidationVisualizer, { ProtocolValidationState } from './ProtocolValidationVisualizer';
-import DfaVisualizer from './DFAVisualizer';
-import AcTrieVisualizer from './AcTrieVisualizer';
-import PDAVisualizer from './PDAVisualizer';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
+import { PDAController } from '../utils/pdaController';
+import { PDATrace } from '../utils/pdaEngine';
 import "./MagicBento.css";
 
 const DEFAULT_PARTICLE_COUNT = 12;
@@ -533,18 +531,8 @@ const MagicBento = ({
   const [payloadBytes, setPayloadBytes] = useState<Uint8Array | null>(null);
   const [matchedPatterns, setMatchedPatterns] = useState<Array<{ pattern: string; position: number }>>([]);
   const [packetInfo, setPacketInfo] = useState<any>(null);
-  
-  // Result View tab state
-  const [activeResultTab, setActiveResultTab] = useState<ResultViewTab>('hex');
-  
-  // Protocol validation state
-  const [protocolValidationState, setProtocolValidationState] = useState<ProtocolValidationState>({
-    status: 'idle'
-  });
-  
-  // PDA data state
-  const [pdaData, setPdaData] = useState<any>(null);
-  const [pdaStackState, setPdaStackState] = useState<string[]>([]);
+  const [pdaTrace, setPdaTrace] = useState<PDATrace[]>([]);
+  const [pdaController] = useState(() => new PDAController());
 
   // Hex view sizing (compute after payload state is available)
   const bytesPerLine = 16;
@@ -622,7 +610,14 @@ const MagicBento = ({
         const text = await file.text();
         const hex = text.replace(/[^0-9a-fA-F]/g, '');
         const bytes = new Uint8Array(hex.match(/.{1,2}/g)?.map(h => parseInt(h, 16)) || []);
-        const ascii = Array.from(bytes).map(b => (b >= 32 && b <= 126 ? String.fromCharCode(b) : '.')).join('');
+        // Preserve HTTP control characters
+        const ascii = Array.from(bytes).map(b => {
+          if (b >= 32 && b <= 126) return String.fromCharCode(b);
+          if (b === 13) return '\r'; // CR
+          if (b === 10) return '\n'; // LF
+          if (b === 9) return '\t'; // TAB
+          return '.'; // Other non-printable
+        }).join('');
         setPayloadHex(Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(''));
         setPayloadAscii(ascii);
         setPayloadBytes(bytes);
@@ -672,7 +667,15 @@ const MagicBento = ({
           const payload = pkt.slice(payloadOffset);
           setPayloadBytes(payload);
           setPayloadHex(Array.from(payload).map(b => b.toString(16).padStart(2, '0')).join(''));
-          setPayloadAscii(Array.from(payload).map(b => (b >= 32 && b <= 126 ? String.fromCharCode(b) : '.')).join(''));
+          // Convert bytes to ASCII, preserving HTTP control characters (\r, \n, \t)
+          const ascii = Array.from(payload).map(b => {
+            if (b >= 32 && b <= 126) return String.fromCharCode(b);
+            if (b === 13) return '\r'; // CR
+            if (b === 10) return '\n'; // LF
+            if (b === 9) return '\t'; // TAB
+            return '.'; // Other non-printable
+          }).join('');
+          setPayloadAscii(ascii);
           return;
         }
       }
@@ -683,7 +686,15 @@ const MagicBento = ({
       const bytes = enc.encode(text);
       setPayloadBytes(bytes);
       setPayloadHex(Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(''));
-      setPayloadAscii(Array.from(bytes).map(b => (b >= 32 && b <= 126 ? String.fromCharCode(b) : '.')).join(''));
+      // Preserve HTTP control characters for text files too
+      const ascii = Array.from(bytes).map(b => {
+        if (b >= 32 && b <= 126) return String.fromCharCode(b);
+        if (b === 13) return '\r'; // CR
+        if (b === 10) return '\n'; // LF
+        if (b === 9) return '\t'; // TAB
+        return '.'; // Other non-printable
+      }).join('');
+      setPayloadAscii(ascii);
       setPacketInfo({ filename: file.name, length: bytes.length, protocol: 'text' });
     } catch (err) {
       console.warn('parseFile error', err);
@@ -710,8 +721,6 @@ const MagicBento = ({
     setMatchedPatterns([]);
     setHighlightedPositions([]);
     runACSimulation();
-    // Switch to DFA tab when inspection starts
-    setActiveResultTab('dfa');
   };
 
   function runACSimulation() {
@@ -828,66 +837,145 @@ const MagicBento = ({
 
   const handlePdaValidation = () => {
     setPdaStatus('inspecting');
-    setPdaData(demoPdaData);
-    setPdaStackState(['Z']);
-    setProtocolValidationState({
-      status: 'validating',
-      protocol: packetInfo?.protocol || 'HTTP',
-      validationSteps: [
-        { id: 'header', name: 'Header Validation', status: 'running' },
-        { id: 'syntax', name: 'Syntax Check', status: 'pending' },
-        { id: 'semantics', name: 'Semantic Validation', status: 'pending' },
-        { id: 'security', name: 'Security Checks', status: 'pending' }
-      ]
-    });
-    // Switch to PDA tab when validation starts
-    setActiveResultTab('pda');
+    setPdaTrace([]);
+
+    // Extract HTTP payload from packet
+    // Try to find HTTP content in the ASCII payload
+    let httpPayload = '';
     
-    // Simulate validation process with step-by-step updates
-    const steps = [
-      { id: 'header', name: 'Header Validation', status: 'passed' as const, message: 'HTTP headers are valid' },
-      { id: 'syntax', name: 'Syntax Check', status: 'running' as const }
-    ];
-    
-    setTimeout(() => {
-      setProtocolValidationState(prev => ({
-        ...prev,
-        validationSteps: [
-          ...steps,
-          { id: 'syntax', name: 'Syntax Check', status: 'passed', message: 'Request syntax is correct' },
-          { id: 'semantics', name: 'Semantic Validation', status: 'running' }
-        ]
-      }));
-    }, 800);
-    
-    setTimeout(() => {
-      const isValid = Math.random() > 0.5;
-      const finalStatus = isValid ? 'valid' : 'invalid';
-      setPdaStatus(isValid ? 'approved' : 'malicious');
+    if (payloadAscii) {
+      // Look for HTTP request line pattern - must start with uppercase method
+      // Match: METHOD SPACE URI SPACE HTTP/VERSION CRLF
+      const httpMatch = payloadAscii.match(/^(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|TRACE|CONNECT)\s+[^\s]+\s+HTTP\/[\d.]+\r\n/i);
       
-      setProtocolValidationState({
-        status: finalStatus,
-        protocol: packetInfo?.protocol || 'HTTP',
-        validationSteps: [
-          { id: 'header', name: 'Header Validation', status: 'passed', message: 'HTTP headers are valid' },
-          { id: 'syntax', name: 'Syntax Check', status: 'passed', message: 'Request syntax is correct' },
-          { id: 'semantics', name: 'Semantic Validation', status: isValid ? 'passed' : 'failed', message: isValid ? 'Semantic rules satisfied' : 'Semantic validation failed' },
-          { id: 'security', name: 'Security Checks', status: isValid ? 'passed' : 'failed', message: isValid ? 'No security issues detected' : 'Security vulnerabilities found' }
-        ],
-        errors: isValid ? undefined : [
-          { id: 'err1', step: 'Semantic Validation', message: 'Invalid request structure', severity: 'error' },
-          { id: 'err2', step: 'Security Checks', message: 'Potential injection detected', severity: 'error' }
-        ],
-        warnings: isValid ? undefined : [
-          { id: 'warn1', step: 'Header Validation', message: 'Unusual header detected', severity: 'warning' }
-        ]
-      });
-      
-      // Switch to protocol tab if validation completes
-      if (finalStatus === 'invalid') {
-        setActiveResultTab('protocol');
+      if (httpMatch) {
+        // Found at start - use from match index
+        const startIdx = payloadAscii.indexOf(httpMatch[0]);
+        httpPayload = payloadAscii.substring(startIdx);
+      } else {
+        // Try to find HTTP method anywhere in the payload
+        const methodMatch = payloadAscii.match(/(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|TRACE|CONNECT)\s+[^\s]+\s+HTTP\/[\d.]+\r\n/i);
+        if (methodMatch && methodMatch.index !== undefined) {
+          httpPayload = payloadAscii.substring(methodMatch.index);
+        } else {
+          // Last resort: check if entire payload looks like HTTP
+          if (/^(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|TRACE|CONNECT)/i.test(payloadAscii.trim())) {
+            httpPayload = payloadAscii.trim();
+          }
+        }
       }
-    }, 2000);
+      
+      // Clean up: remove any leading non-printable characters or whitespace before HTTP method
+      if (httpPayload) {
+        // Find the first HTTP method character (uppercase letter)
+        const methodStart = httpPayload.search(/[A-Z]/);
+        if (methodStart > 0) {
+          httpPayload = httpPayload.substring(methodStart);
+        }
+        
+        // Ensure it starts with a valid HTTP method
+        if (!/^(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|TRACE|CONNECT)\s/.test(httpPayload)) {
+          httpPayload = '';
+        }
+      }
+      
+      // If we have HTTP payload, extract the complete message
+      if (httpPayload) {
+        // Find end of headers (CRLF CRLF)
+        const headerEnd = httpPayload.indexOf('\r\n\r\n');
+        if (headerEnd !== -1) {
+          const headersEnd = headerEnd + 4;
+          const headers = httpPayload.substring(0, headersEnd);
+          
+          // Check for Content-Length header
+          const contentLengthMatch = headers.match(/content-length:\s*(\d+)/i);
+          if (contentLengthMatch) {
+            const bodyLength = parseInt(contentLengthMatch[1], 10);
+            if (bodyLength >= 0) {
+              httpPayload = httpPayload.substring(0, headersEnd + bodyLength);
+            } else {
+              httpPayload = httpPayload.substring(0, headersEnd);
+            }
+          } else {
+            // No Content-Length - take up to end of headers or next HTTP request
+            const nextHttpMatch = httpPayload.substring(headersEnd).match(/^(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|TRACE|CONNECT)\s/i);
+            if (nextHttpMatch && nextHttpMatch.index !== undefined) {
+              httpPayload = httpPayload.substring(0, headersEnd + nextHttpMatch.index);
+            } else {
+              // No next HTTP request, take everything up to end of headers
+              httpPayload = httpPayload.substring(0, headersEnd);
+            }
+          }
+        }
+      }
+    }
+
+    if (!httpPayload || httpPayload.trim().length === 0) {
+      // No HTTP content found
+      setTimeout(() => {
+        setPdaStatus('malicious');
+        setPdaTrace([{
+          state: 'ERROR' as any,
+          input: '',
+          stackTop: '',
+          action: 'No HTTP content found in packet payload'
+        }]);
+      }, 500);
+      return;
+    }
+
+    // Ensure payload starts with HTTP method (no leading whitespace)
+    httpPayload = httpPayload.trimStart();
+    
+    // Verify it starts with a valid HTTP method
+    if (!/^(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|TRACE|CONNECT)\s/.test(httpPayload)) {
+      setTimeout(() => {
+        setPdaStatus('malicious');
+        setPdaTrace([{
+          state: 'ERROR' as any,
+          input: '',
+          stackTop: '',
+          action: 'Invalid HTTP request format - does not start with valid method'
+        }]);
+      }, 500);
+      return;
+    }
+
+    // Debug: Log the payload being validated (can be removed in production)
+    console.log('[PDA] Validating payload, length:', httpPayload.length);
+    console.log('[PDA] Payload preview:', httpPayload.substring(0, 150).replace(/\r/g, '\\r').replace(/\n/g, '\\n'));
+    console.log('[PDA] Has CRLF CRLF:', httpPayload.indexOf('\r\n\r\n') !== -1);
+    if (httpPayload.indexOf('\r\n\r\n') !== -1) {
+      const headerEnd = httpPayload.indexOf('\r\n\r\n');
+      console.log('[PDA] Header end position:', headerEnd);
+      console.log('[PDA] Body length:', httpPayload.length - headerEnd - 4);
+    }
+
+    // Load and validate with PDA
+    pdaController.loadPacket(httpPayload);
+    
+    // Run validation with animation
+    setTimeout(() => {
+      const isValid = pdaController.validate();
+      const trace = pdaController.getAllTrace();
+      
+      // Debug: Log validation result
+      console.log('[PDA] Validation result:', isValid ? 'VALID ✓' : 'INVALID ✗');
+      if (trace.length > 0) {
+        console.log('[PDA] Final state:', trace[trace.length - 1]?.state);
+        console.log('[PDA] Last action:', trace[trace.length - 1]?.action);
+      }
+      
+      if (!isValid && trace.length > 0) {
+        console.log('[PDA] Error trace (first 5 errors):');
+        trace.filter(t => t.state === 'ERROR' || t.action.includes('REJECT') || t.action.includes('invalid') || t.action.includes('expected')).slice(0, 5).forEach(t => {
+          console.log(`  [${t.state}] Input="${t.input}" Action="${t.action}"`);
+        });
+      }
+      
+      setPdaTrace(trace);
+      setPdaStatus(isValid ? 'approved' : 'malicious');
+    }, 100);
   };
 
   // Demo visualization data so the Result View shows something by default
@@ -912,20 +1000,6 @@ const MagicBento = ({
       { from: 0, input: 'h', to: 1 },
       { from: 1, input: 'e', to: 2 }
     ]
-  };
-
-  // Demo PDA data for HTTP validation
-  const demoPdaData = {
-    states: ['q0', 'q1', 'q2', 'q3'],
-    start: 'q0',
-    accept: ['q3'],
-    transitions: [
-      { from: 'q0', to: 'q1', input: 'GET', push: 'S' },
-      { from: 'q1', to: 'q2', input: '/', pop: 'S', push: 'P' },
-      { from: 'q2', to: 'q2', input: 'HTTP', pop: 'P' },
-      { from: 'q2', to: 'q3', input: '1.1', pop: 'P' }
-    ],
-    stackSymbols: ['S', 'P', 'Z']
   };
 
   return (
@@ -1202,60 +1276,129 @@ const MagicBento = ({
                   <p className="magic-bento-card__description">{card.description}</p>
                   {card.label === 'Result View' && (
                     <div className="result-visualizations" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.75rem' }}>
-                      <ResultViewTabs
-                        activeTab={activeResultTab}
-                        onTabChange={setActiveResultTab}
-                        hexViewCount={payloadHex ? Math.ceil(payloadHex.length / 2) : 0}
-                        protocolValidationCount={protocolValidationState.errors?.length || 0}
-                        dfaMatchCount={matchedPatterns.length}
-                        pdaValidationCount={pdaStatus === 'malicious' ? 1 : 0}
-                      />
-                      {activeResultTab === 'hex' && (
-                        <div style={{ minHeight: computedHexHeight, transition: 'min-height 200ms ease', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem' }}>
-                          <HexView payloadHex={payloadHex} payloadAscii={payloadAscii} highlightedPositions={highlightedPositions} matchedPatterns={matchedPatterns} />
-                        </div>
-                      )}
-                      {activeResultTab === 'protocol' && (
-                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem' }}>
-                          <ProtocolValidationVisualizer
-                            validationState={protocolValidationState}
-                            packetInfo={packetInfo}
-                            onStepClick={(stepId) => {
-                              console.log('Step clicked:', stepId);
-                            }}
-                          />
-                        </div>
-                      )}
-                      {activeResultTab === 'dfa' && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '0.5rem', minHeight: '400px' }}>
-                          <DfaVisualizer
-                            dfaData={demoDfaData}
-                            activeState={dfaActiveState}
-                            highlightedPath={dfaHighlightedPath}
-                            onStateClick={(stateId) => {
-                              console.log('DFA state clicked:', stateId);
-                            }}
-                          />
-                          <AcTrieVisualizer
-                            trieData={activeTrieData || demoTrieData}
-                            highlightedNodeId={trieHighlightedNode}
-                            animatedEdges={trieAnimatedEdges}
-                          />
-                        </div>
-                      )}
-                      {activeResultTab === 'pda' && (
-                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem', minHeight: '400px' }}>
-                          <PDAVisualizer
-                            pdaData={pdaData || demoPdaData}
-                            activeState={pdaStatus === 'inspecting' ? 'q1' : undefined}
-                            highlightedPath={pdaStatus === 'malicious' ? ['q0', 'q1', 'q2'] : []}
-                            stackState={pdaStackState}
-                            onStateClick={(stateId) => {
-                              console.log('PDA state clicked:', stateId);
-                            }}
-                          />
-                        </div>
-                      )}
+                      <Tabs defaultValue="payload" className="w-full">
+                        <TabsList className="grid w-full grid-cols-2" shape="pill">
+                          <TabsTrigger value="payload">Payload</TabsTrigger>
+                          <TabsTrigger value="protocol">Protocol</TabsTrigger>
+                        </TabsList>
+                        <TabsContent value="payload">
+                          <div style={{ minHeight: computedHexHeight, transition: 'min-height 200ms ease', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem' }}>
+                            <HexView payloadHex={payloadHex} payloadAscii={payloadAscii} highlightedPositions={highlightedPositions} matchedPatterns={matchedPatterns} />
+                          </div>
+                        </TabsContent>
+                        <TabsContent value="protocol">
+                          <div style={{ padding: '1rem', minHeight: '200px', maxHeight: '500px', overflowY: 'auto' }}>
+                            {packetInfo ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', color: '#cbd5f5' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+                                    <span style={{ color: '#a8adc5', fontSize: '0.85rem', minWidth: '100px' }}>Protocol:</span>
+                                    <span style={{ color: '#cbd5f5', fontWeight: 500, fontFamily: 'monospace', fontSize: '0.85rem', textAlign: 'right', flex: 1 }}>
+                                      {packetInfo.protocol || 'Unknown'}
+                                    </span>
+                                  </div>
+                                  {packetInfo.srcIP && (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+                                      <span style={{ color: '#a8adc5', fontSize: '0.85rem', minWidth: '100px' }}>Source IP:</span>
+                                      <span style={{ color: '#cbd5f5', fontWeight: 500, fontFamily: 'monospace', fontSize: '0.85rem', textAlign: 'right', flex: 1 }}>
+                                        {packetInfo.srcIP}
+                                      </span>
+                                    </div>
+                                  )}
+                                  {packetInfo.dstIP && (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+                                      <span style={{ color: '#a8adc5', fontSize: '0.85rem', minWidth: '100px' }}>Destination IP:</span>
+                                      <span style={{ color: '#cbd5f5', fontWeight: 500, fontFamily: 'monospace', fontSize: '0.85rem', textAlign: 'right', flex: 1 }}>
+                                        {packetInfo.dstIP}
+                                      </span>
+                                    </div>
+                                  )}
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+                                    <span style={{ color: '#a8adc5', fontSize: '0.85rem', minWidth: '100px' }}>Length:</span>
+                                    <span style={{ color: '#cbd5f5', fontWeight: 500, fontFamily: 'monospace', fontSize: '0.85rem', textAlign: 'right', flex: 1 }}>
+                                      {packetInfo.length || 0} bytes
+                                    </span>
+                                  </div>
+                                  {packetInfo.filename && (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+                                      <span style={{ color: '#a8adc5', fontSize: '0.85rem', minWidth: '100px' }}>Filename:</span>
+                                      <span style={{ color: '#cbd5f5', fontWeight: 500, fontFamily: 'monospace', fontSize: '0.85rem', textAlign: 'right', flex: 1, wordBreak: 'break-all' }}>
+                                        {packetInfo.filename}
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* PDA Validation Results */}
+                                {pdaTrace.length > 0 && (
+                                  <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid rgba(168, 85, 247, 0.2)' }}>
+                                    <div style={{ marginBottom: '0.75rem', color: '#e2e8f0', fontSize: '0.9rem', fontWeight: 600 }}>
+                                      HTTP PDA Validation
+                                    </div>
+                                    <div style={{ 
+                                      padding: '0.5rem', 
+                                      borderRadius: '0.5rem', 
+                                      backgroundColor: pdaStatus === 'approved' 
+                                        ? 'rgba(34, 197, 94, 0.1)' 
+                                        : pdaStatus === 'malicious' 
+                                        ? 'rgba(239, 68, 68, 0.1)' 
+                                        : 'rgba(15, 23, 42, 0.3)',
+                                      border: `1px solid ${pdaStatus === 'approved' 
+                                        ? 'rgba(34, 197, 94, 0.3)' 
+                                        : pdaStatus === 'malicious' 
+                                        ? 'rgba(239, 68, 68, 0.3)' 
+                                        : 'rgba(168, 85, 247, 0.2)'}`
+                                    }}>
+                                      <div style={{ 
+                                        color: pdaStatus === 'approved' ? '#22c55e' : pdaStatus === 'malicious' ? '#ef4444' : '#a8adc5',
+                                        fontSize: '0.85rem',
+                                        fontWeight: 600,
+                                        marginBottom: '0.5rem'
+                                      }}>
+                                        Status: {pdaStatus === 'approved' ? 'VALID HTTP' : pdaStatus === 'malicious' ? 'INVALID HTTP' : 'VALIDATING...'}
+                                      </div>
+                                      <div style={{ fontSize: '0.75rem', color: '#a8adc5', marginBottom: '0.75rem' }}>
+                                        Trace Steps: {pdaTrace.length}
+                                      </div>
+                                      <div style={{ 
+                                        maxHeight: '200px', 
+                                        overflowY: 'auto', 
+                                        fontSize: '0.7rem', 
+                                        fontFamily: 'monospace',
+                                        color: '#cbd5f5',
+                                        backgroundColor: 'rgba(2, 6, 23, 0.5)',
+                                        padding: '0.5rem',
+                                        borderRadius: '0.25rem'
+                                      }}>
+                                        {pdaTrace.slice(0, 50).map((step, idx) => (
+                                          <div key={idx} style={{ 
+                                            padding: '0.25rem 0',
+                                            borderBottom: idx < pdaTrace.length - 1 ? '1px solid rgba(168, 85, 247, 0.1)' : 'none'
+                                          }}>
+                                            <span style={{ color: '#a855f7' }}>[{step.state}]</span>{' '}
+                                            <span style={{ color: '#60a5fa' }}>Input={step.input}</span>{' '}
+                                            <span style={{ color: '#fbbf24' }}>Stack={step.stackTop}</span>{' '}
+                                            <span style={{ color: '#cbd5f5' }}>{step.action}</span>
+                                          </div>
+                                        ))}
+                                        {pdaTrace.length > 50 && (
+                                          <div style={{ color: '#a8adc5', paddingTop: '0.5rem', fontStyle: 'italic' }}>
+                                            ... and {pdaTrace.length - 50} more steps
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <div style={{ color: '#a8adc5', fontSize: '0.85rem', textAlign: 'center', padding: '2rem' }}>
+                                No protocol information available. Upload a packet to see details.
+                              </div>
+                            )}
+                          </div>
+                        </TabsContent>
+                      </Tabs>
                     </div>
                   )}
                 </div>
@@ -1273,60 +1416,129 @@ const MagicBento = ({
                 <p className="magic-bento-card__description">{card.description}</p>
                 {card.label === 'Result View' && (
                   <div className="result-visualizations" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.75rem' }}>
-                    <ResultViewTabs
-                      activeTab={activeResultTab}
-                      onTabChange={setActiveResultTab}
-                      hexViewCount={payloadHex ? Math.ceil(payloadHex.length / 2) : 0}
-                      protocolValidationCount={protocolValidationState.errors?.length || 0}
-                      dfaMatchCount={matchedPatterns.length}
-                      pdaValidationCount={pdaStatus === 'malicious' ? 1 : 0}
-                    />
-                    {activeResultTab === 'hex' && (
-                      <div style={{ minHeight: computedHexHeight, transition: 'min-height 200ms ease', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem' }}>
-                        <HexView payloadHex={payloadHex} payloadAscii={payloadAscii} highlightedPositions={highlightedPositions} matchedPatterns={matchedPatterns} />
-                      </div>
-                    )}
-                    {activeResultTab === 'protocol' && (
-                      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem' }}>
-                        <ProtocolValidationVisualizer
-                          validationState={protocolValidationState}
-                          packetInfo={packetInfo}
-                          onStepClick={(stepId) => {
-                            console.log('Step clicked:', stepId);
-                          }}
-                        />
-                      </div>
-                    )}
-                    {activeResultTab === 'dfa' && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '0.5rem', minHeight: '400px' }}>
-                        <DfaVisualizer
-                          dfaData={demoDfaData}
-                          activeState={dfaActiveState}
-                          highlightedPath={dfaHighlightedPath}
-                          onStateClick={(stateId) => {
-                            console.log('DFA state clicked:', stateId);
-                          }}
-                        />
-                        <AcTrieVisualizer
-                          trieData={activeTrieData || demoTrieData}
-                          highlightedNodeId={trieHighlightedNode}
-                          animatedEdges={trieAnimatedEdges}
-                        />
-                      </div>
-                    )}
-                    {activeResultTab === 'pda' && (
-                      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem', minHeight: '400px' }}>
-                        <PDAVisualizer
-                          pdaData={pdaData || demoPdaData}
-                          activeState={pdaStatus === 'inspecting' ? 'q1' : undefined}
-                          highlightedPath={pdaStatus === 'malicious' ? ['q0', 'q1', 'q2'] : []}
-                          stackState={pdaStackState}
-                          onStateClick={(stateId) => {
-                            console.log('PDA state clicked:', stateId);
-                          }}
-                        />
-                      </div>
-                    )}
+                    <Tabs defaultValue="payload" className="w-full">
+                      <TabsList className="grid w-full grid-cols-2" shape="pill">
+                        <TabsTrigger value="payload">Payload</TabsTrigger>
+                        <TabsTrigger value="protocol">Protocol</TabsTrigger>
+                      </TabsList>
+                      <TabsContent value="payload">
+                        <div style={{ minHeight: computedHexHeight, transition: 'min-height 200ms ease', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem' }}>
+                          <HexView payloadHex={payloadHex} payloadAscii={payloadAscii} highlightedPositions={highlightedPositions} matchedPatterns={matchedPatterns} />
+                        </div>
+                      </TabsContent>
+                      <TabsContent value="protocol">
+                        <div style={{ padding: '1rem', minHeight: '200px', maxHeight: '500px', overflowY: 'auto' }}>
+                          {packetInfo ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', color: '#cbd5f5' }}>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+                                  <span style={{ color: '#a8adc5', fontSize: '0.85rem', minWidth: '100px' }}>Protocol:</span>
+                                  <span style={{ color: '#cbd5f5', fontWeight: 500, fontFamily: 'monospace', fontSize: '0.85rem', textAlign: 'right', flex: 1 }}>
+                                    {packetInfo.protocol || 'Unknown'}
+                                  </span>
+                                </div>
+                                {packetInfo.srcIP && (
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+                                    <span style={{ color: '#a8adc5', fontSize: '0.85rem', minWidth: '100px' }}>Source IP:</span>
+                                    <span style={{ color: '#cbd5f5', fontWeight: 500, fontFamily: 'monospace', fontSize: '0.85rem', textAlign: 'right', flex: 1 }}>
+                                      {packetInfo.srcIP}
+                                    </span>
+                                  </div>
+                                )}
+                                {packetInfo.dstIP && (
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+                                    <span style={{ color: '#a8adc5', fontSize: '0.85rem', minWidth: '100px' }}>Destination IP:</span>
+                                    <span style={{ color: '#cbd5f5', fontWeight: 500, fontFamily: 'monospace', fontSize: '0.85rem', textAlign: 'right', flex: 1 }}>
+                                      {packetInfo.dstIP}
+                                    </span>
+                                  </div>
+                                )}
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+                                  <span style={{ color: '#a8adc5', fontSize: '0.85rem', minWidth: '100px' }}>Length:</span>
+                                  <span style={{ color: '#cbd5f5', fontWeight: 500, fontFamily: 'monospace', fontSize: '0.85rem', textAlign: 'right', flex: 1 }}>
+                                    {packetInfo.length || 0} bytes
+                                  </span>
+                                </div>
+                                {packetInfo.filename && (
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+                                    <span style={{ color: '#a8adc5', fontSize: '0.85rem', minWidth: '100px' }}>Filename:</span>
+                                    <span style={{ color: '#cbd5f5', fontWeight: 500, fontFamily: 'monospace', fontSize: '0.85rem', textAlign: 'right', flex: 1, wordBreak: 'break-all' }}>
+                                      {packetInfo.filename}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* PDA Validation Results */}
+                              {pdaTrace.length > 0 && (
+                                <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid rgba(168, 85, 247, 0.2)' }}>
+                                  <div style={{ marginBottom: '0.75rem', color: '#e2e8f0', fontSize: '0.9rem', fontWeight: 600 }}>
+                                    HTTP PDA Validation
+                                  </div>
+                                  <div style={{ 
+                                    padding: '0.5rem', 
+                                    borderRadius: '0.5rem', 
+                                    backgroundColor: pdaStatus === 'approved' 
+                                      ? 'rgba(34, 197, 94, 0.1)' 
+                                      : pdaStatus === 'malicious' 
+                                      ? 'rgba(239, 68, 68, 0.1)' 
+                                      : 'rgba(15, 23, 42, 0.3)',
+                                    border: `1px solid ${pdaStatus === 'approved' 
+                                      ? 'rgba(34, 197, 94, 0.3)' 
+                                      : pdaStatus === 'malicious' 
+                                      ? 'rgba(239, 68, 68, 0.3)' 
+                                      : 'rgba(168, 85, 247, 0.2)'}`
+                                  }}>
+                                    <div style={{ 
+                                      color: pdaStatus === 'approved' ? '#22c55e' : pdaStatus === 'malicious' ? '#ef4444' : '#a8adc5',
+                                      fontSize: '0.85rem',
+                                      fontWeight: 600,
+                                      marginBottom: '0.5rem'
+                                    }}>
+                                      Status: {pdaStatus === 'approved' ? 'VALID HTTP' : pdaStatus === 'malicious' ? 'INVALID HTTP' : 'VALIDATING...'}
+                                    </div>
+                                    <div style={{ fontSize: '0.75rem', color: '#a8adc5', marginBottom: '0.75rem' }}>
+                                      Trace Steps: {pdaTrace.length}
+                                    </div>
+                                    <div style={{ 
+                                      maxHeight: '200px', 
+                                      overflowY: 'auto', 
+                                      fontSize: '0.7rem', 
+                                      fontFamily: 'monospace',
+                                      color: '#cbd5f5',
+                                      backgroundColor: 'rgba(2, 6, 23, 0.5)',
+                                      padding: '0.5rem',
+                                      borderRadius: '0.25rem'
+                                    }}>
+                                      {pdaTrace.slice(0, 50).map((step, idx) => (
+                                        <div key={idx} style={{ 
+                                          padding: '0.25rem 0',
+                                          borderBottom: idx < pdaTrace.length - 1 ? '1px solid rgba(168, 85, 247, 0.1)' : 'none'
+                                        }}>
+                                          <span style={{ color: '#a855f7' }}>[{step.state}]</span>{' '}
+                                          <span style={{ color: '#60a5fa' }}>Input={step.input}</span>{' '}
+                                          <span style={{ color: '#fbbf24' }}>Stack={step.stackTop}</span>{' '}
+                                          <span style={{ color: '#cbd5f5' }}>{step.action}</span>
+                                        </div>
+                                      ))}
+                                      {pdaTrace.length > 50 && (
+                                        <div style={{ color: '#a8adc5', paddingTop: '0.5rem', fontStyle: 'italic' }}>
+                                          ... and {pdaTrace.length - 50} more steps
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div style={{ color: '#a8adc5', fontSize: '0.85rem', textAlign: 'center', padding: '2rem' }}>
+                              No protocol information available. Upload a packet to see details.
+                            </div>
+                          )}
+                        </div>
+                      </TabsContent>
+                    </Tabs>
                   </div>
                 )}
               </div>

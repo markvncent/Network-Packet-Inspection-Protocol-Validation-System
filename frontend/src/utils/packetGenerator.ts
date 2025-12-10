@@ -4,7 +4,9 @@
  */
 
 export interface PacketGeneratorOptions {
-  type: 'benign' | 'malicious';
+  payloadType?: 'benign' | 'malicious';
+  protocolType?: 'valid' | 'invalid';
+  random?: boolean;
 }
 
 export interface GeneratedPacket {
@@ -58,18 +60,81 @@ const generateTCPHeader = (flags: string[]): string => {
 };
 
 /**
- * Generate HTTP GET request
+ * Generate valid HTTP request (PDA-compatible)
+ * Ensures strict compliance with PDA validation requirements:
+ * - Request line: METHOD SPACE URI SPACE HTTP/VERSION CRLF
+ * - Headers: HeaderName: HeaderValue CRLF (each header on its own line)
+ * - End headers: CRLF CRLF (empty line)
+ * - Body: Optional, must match Content-Length if specified
  */
-const generateBenignHTTP = (log: string[]): { hex: string; payload: string } => {
-  const methods = ['GET', 'POST', 'HEAD'];
-  const paths = ['/api/users', '/index.html', '/api/data', '/static/img.png'];
+const generateValidHTTP = (payloadType: 'benign' | 'malicious', log: string[]): { hex: string; payload: string } => {
+  const methods = ['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS'];
+  const paths = ['/api/users', '/index.html', '/api/data', '/static/img.png', '/search'];
   const hosts = ['example.com', 'api.example.com', 'cdn.example.com'];
 
   const method = methods[Math.floor(Math.random() * methods.length)];
   const path = paths[Math.floor(Math.random() * paths.length)];
   const host = hosts[Math.floor(Math.random() * hosts.length)];
 
-  const httpPayload = `${method} ${path} HTTP/1.1\r\nHost: ${host}\r\nUser-Agent: Mozilla/5.0\r\nAccept: */*\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n`;
+  // Build request line: METHOD SPACE URI SPACE HTTP/VERSION CRLF
+  // Must start with uppercase method, no leading whitespace
+  let httpPayload = `${method} ${path} HTTP/1.1\r\n`;
+  
+  // Build headers - each header must be: HeaderName: HeaderValue CRLF
+  // Header names must start with letter, can contain letters, numbers, hyphens
+  // Header values can contain most printable characters
+  httpPayload += `Host: ${host}\r\n`;
+  httpPayload += `User-Agent: Mozilla/5.0\r\n`;
+  httpPayload += `Accept: */*\r\n`;
+  httpPayload += `Connection: close\r\n`;
+
+  let bodyContent = '';
+  
+  // Add body for POST/PUT requests
+  if (method === 'POST' || method === 'PUT') {
+    if (payloadType === 'malicious') {
+      bodyContent = '{"data":"malicious"}';
+    } else {
+      bodyContent = '{"data":"test"}';
+    }
+    // Add Content-Length header BEFORE the empty line
+    // Value must be exact byte count of body
+    httpPayload += `Content-Length: ${bodyContent.length}\r\n`;
+  }
+
+  if (payloadType === 'malicious') {
+    // Add malicious patterns in headers (ensure header name is valid)
+    // Use simple patterns that won't break header parsing
+    const maliciousPatterns = ['virus', 'exploit', 'malware'];
+    const pattern = maliciousPatterns[Math.floor(Math.random() * maliciousPatterns.length)];
+    httpPayload += `X-Custom: ${pattern}\r\n`;
+  }
+
+  // End headers with CRLF CRLF (empty line) - this is critical for PDA
+  httpPayload += `\r\n`;
+  
+  // Add body if present (must match Content-Length exactly)
+  // No trailing CRLF after body - body ends at Content-Length bytes
+  if (bodyContent) {
+    httpPayload += bodyContent;
+  }
+
+  // Validate the generated payload structure
+  // Ensure it starts with HTTP method
+  if (!/^[A-Z]+\s/.test(httpPayload)) {
+    throw new Error('Generated HTTP payload does not start with valid method');
+  }
+  
+  // Ensure request line ends with CRLF
+  const requestLineEnd = httpPayload.indexOf('\r\n');
+  if (requestLineEnd === -1) {
+    throw new Error('Generated HTTP payload missing CRLF in request line');
+  }
+  
+  // Ensure headers end with CRLF CRLF
+  if (httpPayload.indexOf('\r\n\r\n') === -1) {
+    throw new Error('Generated HTTP payload missing CRLF CRLF to end headers');
+  }
 
   const hex = Array.from(httpPayload)
     .map(c => c.charCodeAt(0).toString(16).padStart(2, '0'))
@@ -79,57 +144,57 @@ const generateBenignHTTP = (log: string[]): { hex: string; payload: string } => 
 };
 
 /**
- * Generate HTTP request with patterns
+ * Generate invalid HTTP request (PDA should reject)
  */
-const generateMaliciousHTTP = (
-  log: string[]
-): { hex: string; payload: string; anomalies: string[] } => {
-  const anomalies: string[] = [];
+const generateInvalidHTTP = (log: string[]): { hex: string; payload: string } => {
+  const invalidTypes = [
+    // Missing method
+    () => ` /index.html HTTP/1.1\r\nHost: example.com\r\n\r\n`,
+    // Missing space after method
+    () => `GET/index.html HTTP/1.1\r\nHost: example.com\r\n\r\n`,
+    // Invalid version format
+    () => `GET /index.html HTTP/2.0\r\nHost: example.com\r\n\r\n`,
+    // Missing CRLF after request line
+    () => `GET /index.html HTTP/1.1\nHost: example.com\r\n\r\n`,
+    // Invalid header format (no colon)
+    () => `GET /index.html HTTP/1.1\r\nHost example.com\r\n\r\n`,
+    // Missing header value
+    () => `GET /index.html HTTP/1.1\r\nHost:\r\n\r\n`,
+    // Invalid method (lowercase)
+    () => `get /index.html HTTP/1.1\r\nHost: example.com\r\n\r\n`,
+    // Missing version
+    () => `GET /index.html\r\nHost: example.com\r\n\r\n`,
+  ];
 
-  const patterns = {
-    malware: ['virus', 'malware', 'exploit', 'ransom', 'trojan', 'backdoor', 'rootkit'],
-    xss: ['<script', '</script', '<iframe', 'eval', 'base64'],
-    sql: ["' OR 1", 'UNION SELECT', 'DROP TABLE'],
-    phishing: ['login', 'verify', 'password', 'account'],
-    cmd: [';r', '&&w', '|b']
-  };
+  const selectedType = invalidTypes[Math.floor(Math.random() * invalidTypes.length)];
+  const httpPayload = selectedType();
 
-  const categories = Object.keys(patterns) as Array<keyof typeof patterns>;
-  const selectedCategories = categories.sort(() => Math.random() - 0.5).slice(0, Math.random() > 0.5 ? 2 : 3);
-
-  let injectionPayloads: string[] = [];
-  const selectedPatterns: string[] = [];
-
-  selectedCategories.forEach(category => {
-    const categoryPatterns = patterns[category];
-    const selected = categoryPatterns[Math.floor(Math.random() * categoryPatterns.length)];
-    selectedPatterns.push(selected);
-    injectionPayloads.push(selected);
-  });
-
-  let headers = `GET /search?q=${encodeURIComponent(injectionPayloads[0])} HTTP/1.1\r\n`;
-  headers += `Host: api.example.com\r\n`;
-  headers += `User-Agent: Mozilla/5.0\r\n`;
-  headers += `X-Custom-Header: ${selectedPatterns[1] || selectedPatterns[0]}\r\n`;
-
-  if (selectedCategories.includes('cmd') && selectedPatterns.some(p => [';r', '&&w', '|b'].includes(p))) {
-    const cmdPattern = selectedPatterns.find(p => [';r', '&&w', '|b'].includes(p)) || ';r';
-    headers += `X-Execute: cmd${cmdPattern}\r\n`;
-  }
-
-  headers += `Connection: close\r\n`;
-  headers += `\r\n`;
-  
-  if (selectedCategories.includes('xss')) {
-    const xssPattern = selectedPatterns.find(p => ['<script', '</script', '<iframe', 'eval', 'base64'].includes(p)) || '<script';
-    headers += `${xssPattern} alert('xss') ${xssPattern === '<script' ? '</script>' : ''}\r\n`;
-  }
-
-  const hex = Array.from(headers)
+  const hex = Array.from(httpPayload)
     .map(c => c.charCodeAt(0).toString(16).padStart(2, '0'))
     .join('');
 
-  return { hex, payload: headers, anomalies };
+  return { hex, payload: httpPayload };
+};
+
+/**
+ * Generate random HTTP packet (mix of valid/invalid, benign/malicious)
+ */
+const generateRandomHTTP = (log: string[]): { hex: string; payload: string; anomalies?: string[] } => {
+  const randomType = Math.random();
+  
+  if (randomType < 0.3) {
+    // 30% chance: invalid protocol
+    log.push('Generating random invalid HTTP protocol');
+    return generateInvalidHTTP(log);
+  } else if (randomType < 0.6) {
+    // 30% chance: valid HTTP with malicious payload
+    log.push('Generating random valid HTTP with malicious payload');
+    return generateValidHTTP('malicious', log);
+  } else {
+    // 40% chance: valid HTTP with benign payload
+    log.push('Generating random valid HTTP with benign payload');
+    return generateValidHTTP('benign', log);
+  }
 };
 
 /**
@@ -236,22 +301,50 @@ export const generatePacket = (options: PacketGeneratorOptions): GeneratedPacket
   const sourcePort = generatePort();
   const destPort = 80;
 
-  const flags = options.type === 'benign' ? ['SYN', 'ACK'] : ['SYN'];
-  const tcpHeader = generateTCPHeader(flags);
-
   let payload: string;
   let anomalies: string[] = [];
+  let packetType: 'benign' | 'malicious' = 'benign';
+  let isValidProtocol = true;
 
-  if (options.type === 'benign') {
-    const result = generateBenignHTTP(log);
+  // Determine generation strategy
+  if (options.random) {
+    // Random generation
+    const result = generateRandomHTTP(log);
     payload = result.payload;
+    packetType = result.payload.includes('malicious') || result.payload.includes('<script') || result.payload.includes('UNION') ? 'malicious' : 'benign';
+    isValidProtocol = result.payload.match(/^[A-Z]+\s+\S+\s+HTTP\/1\.\d\r\n/) !== null;
+    if (result.anomalies) {
+      anomalies = result.anomalies;
+    }
+  } else if (options.protocolType === 'invalid') {
+    // Invalid protocol
+    const result = generateInvalidHTTP(log);
+    payload = result.payload;
+    isValidProtocol = false;
+    packetType = payload.includes('malicious') || payload.includes('<script') ? 'malicious' : 'benign';
+    anomalies.push('Invalid HTTP protocol structure');
   } else {
-    const result = generateMaliciousHTTP(log);
+    // Valid protocol with specified payload type
+    const payloadType = options.payloadType || 'benign';
+    const result = generateValidHTTP(payloadType, log);
     payload = result.payload;
-    anomalies = result.anomalies;
+    packetType = payloadType;
+    isValidProtocol = true;
+    if (payloadType === 'malicious') {
+      anomalies.push('Malicious payload patterns detected');
+    }
   }
 
+  const flags = packetType === 'benign' ? ['SYN', 'ACK'] : ['SYN'];
+  const tcpHeader = generateTCPHeader(flags);
+
+  // For PCAP: include TCP header + HTTP payload
   const rawHex = tcpHeader + Array.from(payload)
+    .map(c => c.charCodeAt(0).toString(16).padStart(2, '0'))
+    .join('');
+
+  // For direct HTTP validation: use only the HTTP payload (no TCP headers)
+  const httpPayloadHex = Array.from(payload)
     .map(c => c.charCodeAt(0).toString(16).padStart(2, '0'))
     .join('');
 
@@ -269,11 +362,11 @@ export const generatePacket = (options: PacketGeneratorOptions): GeneratedPacket
 
   return {
     timestamp,
-    type: options.type,
-    protocol: 'HTTP',
-    rawHex,
-    payload,
-    pcapBase64,
+    type: packetType,
+    protocol: isValidProtocol ? 'HTTP' : 'HTTP-INVALID',
+    rawHex: httpPayloadHex, // Store only HTTP payload hex (no TCP headers) for validation
+    payload, // HTTP payload string
+    pcapBase64, // Full PCAP with TCP headers
     metadata: {
       sourceIP,
       destIP,

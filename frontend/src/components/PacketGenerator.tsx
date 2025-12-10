@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
 import { generatePacket, exportPacketAsHex, exportPacketAsText, exportPacketAsPcap, GeneratedPacket } from '../utils/packetGenerator';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import './PacketGenerator.css';
 
 interface PacketGeneratorModalProps {
@@ -7,22 +8,43 @@ interface PacketGeneratorModalProps {
   onClose: () => void;
 }
 
+type PacketOption = {
+  payloadType: 'benign' | 'malicious';
+  protocolType: 'valid' | 'invalid';
+};
+
 export const PacketGeneratorModal = ({ isOpen, onClose }: PacketGeneratorModalProps) => {
-  const [packetType, setPacketType] = useState<'benign' | 'malicious'>('benign');
+  const [selectedOption, setSelectedOption] = useState<PacketOption>({
+    payloadType: 'benign',
+    protocolType: 'valid'
+  });
   const [generatedPacket, setGeneratedPacket] = useState<GeneratedPacket | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
 
   const handleGenerate = async () => {
     setIsGenerating(true);
-    // Simulate generation delay for visual effect
     setTimeout(() => {
       const packet = generatePacket({
-        type: packetType
+        payloadType: selectedOption.payloadType,
+        protocolType: selectedOption.protocolType
       });
       setGeneratedPacket(packet);
       setIsGenerating(false);
-      // Auto-scroll to bottom of log
+      setTimeout(() => {
+        logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
+    }, 500);
+  };
+
+  const handleGenerateRandom = async () => {
+    setIsGenerating(true);
+    setTimeout(() => {
+      const packet = generatePacket({
+        random: true
+      });
+      setGeneratedPacket(packet);
+      setIsGenerating(false);
       setTimeout(() => {
         logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
       }, 100);
@@ -79,23 +101,108 @@ export const PacketGeneratorModal = ({ isOpen, onClose }: PacketGeneratorModalPr
         </div>
 
         <div className="modal-body">
-          <div className="generator-controls">
-            <div className="control-group">
-              <label>Packet Type</label>
-              <select value={packetType} onChange={e => setPacketType(e.target.value as 'benign' | 'malicious')}>
-                <option value="benign">Benign (Normal HTTP Traffic)</option>
-                <option value="malicious">Malicious (HTTP with Attack Patterns)</option>
-              </select>
-            </div>
+          <Tabs defaultValue="configure" className="generator-tabs">
+            <TabsList className="generator-tabs-list">
+              <TabsTrigger value="configure">Configure</TabsTrigger>
+              <TabsTrigger value="random">Random</TabsTrigger>
+            </TabsList>
 
-            <button 
-              className="generate-btn" 
-              onClick={handleGenerate}
-              disabled={isGenerating}
-            >
-              {isGenerating ? 'Generating...' : 'Generate PCAP Packet'}
-            </button>
-          </div>
+            <TabsContent value="configure" className="generator-tab-content">
+              <div className="generator-controls">
+                <div className="control-group">
+                  <label>Packet Configuration</label>
+                  <p className="option-description">
+                    Select a combination of payload type and protocol structure
+                  </p>
+                  <div className="option-grid">
+                    <button
+                      className={`option-card ${selectedOption.payloadType === 'benign' && selectedOption.protocolType === 'valid' ? 'active' : ''}`}
+                      onClick={() => setSelectedOption({ payloadType: 'benign', protocolType: 'valid' })}
+                    >
+                      <div className="option-card-header">
+                        <span className="option-badge benign">Benign</span>
+                        <span className="option-badge valid">Valid</span>
+                      </div>
+                      <div className="option-card-body">
+                        <p>Safe payload with valid HTTP protocol structure</p>
+                        <small>PDA will accept</small>
+                      </div>
+                    </button>
+
+                    <button
+                      className={`option-card ${selectedOption.payloadType === 'benign' && selectedOption.protocolType === 'invalid' ? 'active' : ''}`}
+                      onClick={() => setSelectedOption({ payloadType: 'benign', protocolType: 'invalid' })}
+                    >
+                      <div className="option-card-header">
+                        <span className="option-badge benign">Benign</span>
+                        <span className="option-badge invalid">Invalid</span>
+                      </div>
+                      <div className="option-card-body">
+                        <p>Safe payload with invalid HTTP protocol structure</p>
+                        <small>PDA will reject</small>
+                      </div>
+                    </button>
+
+                    <button
+                      className={`option-card ${selectedOption.payloadType === 'malicious' && selectedOption.protocolType === 'valid' ? 'active' : ''}`}
+                      onClick={() => setSelectedOption({ payloadType: 'malicious', protocolType: 'valid' })}
+                    >
+                      <div className="option-card-header">
+                        <span className="option-badge malicious">Malicious</span>
+                        <span className="option-badge valid">Valid</span>
+                      </div>
+                      <div className="option-card-body">
+                        <p>Attack patterns with valid HTTP protocol structure</p>
+                        <small>PDA will accept, DFA will detect</small>
+                      </div>
+                    </button>
+
+                    <button
+                      className={`option-card ${selectedOption.payloadType === 'malicious' && selectedOption.protocolType === 'invalid' ? 'active' : ''}`}
+                      onClick={() => setSelectedOption({ payloadType: 'malicious', protocolType: 'invalid' })}
+                    >
+                      <div className="option-card-header">
+                        <span className="option-badge malicious">Malicious</span>
+                        <span className="option-badge invalid">Invalid</span>
+                      </div>
+                      <div className="option-card-body">
+                        <p>Attack patterns with invalid HTTP protocol structure</p>
+                        <small>PDA will reject, DFA will detect</small>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
+                <button 
+                  className="generate-btn" 
+                  onClick={handleGenerate}
+                  disabled={isGenerating}
+                >
+                  {isGenerating ? 'Generating...' : 'Generate Packet'}
+                </button>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="random" className="generator-tab-content">
+              <div className="generator-controls">
+                <div className="control-group">
+                  <label>Random Generation</label>
+                  <p className="option-description">
+                    Generate a random HTTP packet without explicit rules. May be valid or invalid, 
+                    benign or malicious. Perfect for testing validation systems.
+                  </p>
+                </div>
+
+                <button 
+                  className="generate-btn" 
+                  onClick={handleGenerateRandom}
+                  disabled={isGenerating}
+                >
+                  {isGenerating ? 'Generating...' : 'Generate Random Packet'}
+                </button>
+              </div>
+            </TabsContent>
+          </Tabs>
 
           {generatedPacket && (
             <div className="packet-results">
