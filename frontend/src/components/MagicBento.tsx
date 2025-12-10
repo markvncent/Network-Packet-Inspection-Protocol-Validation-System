@@ -2,9 +2,10 @@ import { useRef, useEffect, useCallback, useState } from "react";
 import { gsap } from "gsap";
 import PacketGeneratorModal from "./PacketGenerator";
 import HexView from './HexView';
+import StackVisualizer from './StackVisualizer';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { PDAController } from '../utils/pdaController';
-import { PDATrace } from '../utils/pdaEngine';
+import { PDATrace, PDAState } from '../utils/pdaEngine';
 import "./MagicBento.css";
 
 const DEFAULT_PARTICLE_COUNT = 12;
@@ -544,6 +545,11 @@ const MagicBento = ({
   const [packetInfo, setPacketInfo] = useState<any>(null);
   const [pdaTrace, setPdaTrace] = useState<PDATrace[]>([]);
   const [pdaController] = useState(() => new PDAController());
+  const [pdaCurrentStep, setPdaCurrentStep] = useState<number>(0);
+  const [pdaErrorPosition, setPdaErrorPosition] = useState<number | null>(null);
+  const [pdaStack, setPdaStack] = useState<string[]>([]);
+  const [pdaIsAnimating, setPdaIsAnimating] = useState<boolean>(false);
+  const [pdaHttpPayloadOffset, setPdaHttpPayloadOffset] = useState<number>(0);
 
   const renderPdaTrace = (trace: PDATrace[]) => {
     if (!trace || trace.length === 0) {
@@ -554,8 +560,12 @@ const MagicBento = ({
       );
     }
 
+    // Show up to current step + some context, or last 120 steps if not animating
     const maxSteps = 120;
-    const sliced = trace.slice(-maxSteps);
+    const displayTrace = pdaIsAnimating 
+      ? trace.slice(0, Math.min(pdaCurrentStep + 1, trace.length))
+      : trace.slice(-maxSteps);
+    const startIdx = pdaIsAnimating ? 0 : Math.max(0, trace.length - maxSteps);
 
     const badgeStyle = (state: string) => {
       if (state === 'ACCEPT') return { background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.4)' };
@@ -566,32 +576,58 @@ const MagicBento = ({
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#cbd5f5', fontSize: '0.9rem', fontWeight: 600 }}>
-          <span>PDA Trace (last {Math.min(trace.length, maxSteps)} of {trace.length} steps)</span>
+          <span>
+            PDA Trace {pdaIsAnimating ? `(Step ${pdaCurrentStep + 1}/${trace.length})` : `(${displayTrace.length} of ${trace.length} steps)`}
+          </span>
           <span style={{ color: '#a8adc5', fontSize: '0.8rem' }}>State / Input / Action</span>
         </div>
         <div style={{ maxHeight: '320px', overflowY: 'auto', background: 'rgba(2,6,23,0.6)', border: '1px solid rgba(168,85,247,0.2)', borderRadius: '0.5rem' }}>
-          {sliced.map((t, idx) => {
+          {displayTrace.map((t, idx) => {
+            const actualIdx = pdaIsAnimating ? idx : startIdx + idx;
             const isError = t.state === 'ERROR' || t.action.toLowerCase().includes('reject') || t.action.toLowerCase().includes('invalid');
+            const isCurrent = pdaIsAnimating && actualIdx === pdaCurrentStep;
             return (
               <div
-                key={`${idx}-${t.state}-${t.input}-${t.action}`}
+                key={`${actualIdx}-${t.state}-${t.input}-${t.action}`}
                 style={{
                   display: 'grid',
                   gridTemplateColumns: '60px 110px 1fr',
                   gap: '0.5rem',
                   alignItems: 'center',
                   padding: '0.5rem 0.75rem',
-                  borderBottom: idx === sliced.length - 1 ? 'none' : '1px solid rgba(148,163,184,0.1)',
-                  background: isError ? 'rgba(239,68,68,0.08)' : 'transparent'
+                  borderBottom: idx === displayTrace.length - 1 ? 'none' : '1px solid rgba(148,163,184,0.1)',
+                  background: isCurrent 
+                    ? 'rgba(59,130,246,0.2)' 
+                    : isError 
+                    ? 'rgba(239,68,68,0.08)' 
+                    : 'transparent',
+                  borderLeft: isCurrent ? '3px solid #3b82f6' : isError ? '3px solid #ef4444' : 'none'
                 }}
               >
-                <span style={{ color: '#a8adc5', fontSize: '0.8rem' }}>#{trace.length - sliced.length + idx + 1}</span>
+                <span style={{ color: '#a8adc5', fontSize: '0.8rem' }}>#{actualIdx + 1}</span>
                 <span style={{ ...badgeStyle(t.state), padding: '0.2rem 0.4rem', borderRadius: '0.4rem', fontSize: '0.75rem', textAlign: 'center' }}>
                   {t.state}
                 </span>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.8rem', color: '#cbd5f5' }}>
-                  <div><span style={{ color: '#94a3b8' }}>Input:</span> {t.input === '' ? '␀ (EOF)' : JSON.stringify(t.input)}</div>
-                  <div style={{ color: isError ? '#ef4444' : '#cbd5f5' }}>{t.action}</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.8rem', color: '#cbd5f5' }}>
+                  <div>
+                    <span style={{ color: '#94a3b8' }}>Input:</span> {t.input === '' || t.input === 'ε' ? 'ε' : JSON.stringify(t.input)}
+                    {t.position !== undefined && (
+                      <span style={{ color: '#64748b', marginLeft: '0.5rem', fontSize: '0.75rem' }}>@ pos {t.position}</span>
+                    )}
+                  </div>
+                  <div style={{ color: isError ? '#ef4444' : '#cbd5f5' }}>
+                    {t.action}
+                    {isError && t.position !== undefined && (
+                      <span style={{ color: '#ef4444', marginLeft: '0.5rem', fontSize: '0.75rem', fontWeight: 600 }}>
+                        [ERROR at position {t.position}]
+                      </span>
+                    )}
+                  </div>
+                  {t.stackTop && (
+                    <div style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
+                      Stack top: <span style={{ fontFamily: 'monospace', color: '#c4b5fd' }}>{t.stackTop}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -905,6 +941,11 @@ const MagicBento = ({
   const handlePdaValidation = () => {
     setPdaStatus('inspecting');
     setPdaTrace([]);
+    setPdaCurrentStep(0);
+    setPdaErrorPosition(null);
+    setPdaStack(['$']);
+    setPdaIsAnimating(true);
+    clearSimulationTimers();
 
     // Extract HTTP payload from packet
     // Try to find HTTP content in the ASCII payload
@@ -985,8 +1026,11 @@ const MagicBento = ({
           state: 'ERROR' as any,
           input: '',
           stackTop: '',
-          action: 'No HTTP content found in packet payload'
+          action: 'No HTTP content found in packet payload',
+          position: 0
         }]);
+        setPdaErrorPosition(0);
+        setPdaIsAnimating(false);
       }, 500);
       return;
     }
@@ -1002,48 +1046,175 @@ const MagicBento = ({
           state: 'ERROR' as any,
           input: '',
           stackTop: '',
-          action: 'Invalid HTTP request format - does not start with valid method'
+          action: 'Invalid HTTP request format - does not start with valid method',
+          position: 0
         }]);
+        setPdaErrorPosition(0);
+        setPdaIsAnimating(false);
       }, 500);
       return;
     }
 
-    // Debug: Log the payload being validated (can be removed in production)
-    console.log('[PDA] Validating payload, length:', httpPayload.length);
-    console.log('[PDA] Payload preview:', httpPayload.substring(0, 150).replace(/\r/g, '\\r').replace(/\n/g, '\\n'));
-    console.log('[PDA] Has CRLF CRLF:', httpPayload.indexOf('\r\n\r\n') !== -1);
-    if (httpPayload.indexOf('\r\n\r\n') !== -1) {
-      const headerEnd = httpPayload.indexOf('\r\n\r\n');
-      console.log('[PDA] Header end position:', headerEnd);
-      console.log('[PDA] Body length:', httpPayload.length - headerEnd - 4);
-    }
-
+    // Calculate offset of HTTP payload in the full payloadAscii
+    const httpPayloadOffset = payloadAscii ? payloadAscii.indexOf(httpPayload) : 0;
+    setPdaHttpPayloadOffset(httpPayloadOffset >= 0 ? httpPayloadOffset : 0);
+    
     // Load and validate with PDA
     pdaController.loadPacket(httpPayload);
     
-    // Run validation with animation
-    setTimeout(() => {
-      const isValid = pdaController.validate();
-      const trace = pdaController.getAllTrace();
-      
-      // Debug: Log validation result
-      console.log('[PDA] Validation result:', isValid ? 'VALID ✓' : 'INVALID ✗');
-      if (trace.length > 0) {
-        console.log('[PDA] Final state:', trace[trace.length - 1]?.state);
-        console.log('[PDA] Last action:', trace[trace.length - 1]?.action);
-      }
-      
-      if (!isValid && trace.length > 0) {
-        console.log('[PDA] Error trace (first 5 errors):');
-        trace.filter(t => t.state === 'ERROR' || t.action.includes('REJECT') || t.action.includes('invalid') || t.action.includes('expected')).slice(0, 5).forEach(t => {
-          console.log(`  [${t.state}] Input="${t.input}" Action="${t.action}"`);
-        });
-      }
-      
-      setPdaTrace(trace);
-      setPdaStatus(isValid ? 'approved' : 'malicious');
-    }, 100);
+    // Run validation first to get full trace
+    const isValid = pdaController.validate();
+    const trace = pdaController.getAllTrace();
+    
+    // Find error position and map it to full payload
+    const errorTrace = trace.find(t => t.state === 'ERROR' || t.action.toLowerCase().includes('reject') || t.action.toLowerCase().includes('invalid') || t.action.toLowerCase().includes('expected'));
+    if (errorTrace && errorTrace.position !== undefined) {
+      // Map position from HTTP payload to full payload
+      const fullPosition = httpPayloadOffset >= 0 ? httpPayloadOffset + errorTrace.position : errorTrace.position;
+      setPdaErrorPosition(fullPosition);
+    }
+    
+    // Start step-by-step animation
+    setPdaTrace(trace);
+    // Initialize stack to empty - it will be built up during animation
+    setPdaStack([]);
+    runPdaSimulation(trace, isValid);
   };
+
+  function runPdaSimulation(trace: PDATrace[], isValid: boolean) {
+    let step = 0;
+    // Initialize stack based on first trace entry
+    const stack: string[] = [];
+    
+    const intervalId = window.setInterval(() => {
+      if (step >= trace.length) {
+        window.clearInterval(intervalId);
+        setPdaIsAnimating(false);
+        setPdaStatus(isValid ? 'approved' : 'malicious');
+        return;
+      }
+
+      const currentTrace = trace[step];
+      
+      // Update stack based on action - parse new format from refactored engine
+      // Actions look like: "push bottom marker (push $)" or "pop REQ_LINE marker - request line complete (pop REQ_LINE)"
+      if (currentTrace.action.includes('(push')) {
+        // Extract symbol from patterns like:
+        // "push bottom marker (push $)"
+        // "push HTTP marker (push HTTP)"
+        // "push REQ_LINE marker - start request line parsing (push REQ_LINE)"
+        let symbol = '';
+        
+        // First try to extract from "(push SYMBOL)" pattern at the end
+        const pushMatch1 = currentTrace.action.match(/\(push\s+([A-Z_$]+)\)/);
+        if (pushMatch1) {
+          symbol = pushMatch1[1];
+        } else {
+          // Try to extract from "push SYMBOL marker" pattern
+          const pushMatch2 = currentTrace.action.match(/push\s+([A-Z_$]+)\s+marker/);
+          if (pushMatch2) {
+            symbol = pushMatch2[1];
+          } else {
+            // Try to extract from action text directly
+            const pushMatch3 = currentTrace.action.match(/push\s+([A-Z_$]+)/);
+            if (pushMatch3) {
+              symbol = pushMatch3[1];
+            }
+          }
+        }
+        
+        if (symbol) {
+          stack.push(symbol);
+        }
+      } else if (currentTrace.action.includes('(pop') && !currentTrace.action.includes('(pop failed')) {
+        // Extract symbol from patterns like:
+        // "pop REQ_LINE marker - request line complete (pop REQ_LINE)"
+        // "pop CR marker (pop CR)"
+        let symbol = '';
+        
+        // First try to extract from "(pop SYMBOL)" pattern at the end
+        const popMatch1 = currentTrace.action.match(/\(pop\s+([A-Z_$]+)\)/);
+        if (popMatch1) {
+          symbol = popMatch1[1];
+        } else {
+          // Try to extract from "pop SYMBOL marker" pattern
+          const popMatch2 = currentTrace.action.match(/pop\s+([A-Z_$]+)\s+marker/);
+          if (popMatch2) {
+            symbol = popMatch2[1];
+          } else {
+            // Try to extract from action text directly
+            const popMatch3 = currentTrace.action.match(/pop\s+([A-Z_$]+)/);
+            if (popMatch3) {
+              symbol = popMatch3[1];
+            }
+          }
+        }
+        
+        if (symbol && stack.length > 0) {
+          // Pop the expected symbol (should be on top)
+          if (stack[stack.length - 1] === symbol) {
+            stack.pop();
+          } else {
+            // If top doesn't match, still pop (might be out of sync, but try to recover)
+            console.warn(`[PDA] Stack mismatch at step ${step}: expected to pop ${symbol}, but top is ${stack.length > 0 ? stack[stack.length - 1] : 'empty'}. Action: ${currentTrace.action}`);
+            if (stack.length > 0) {
+              stack.pop();
+            }
+          }
+        } else if (stack.length > 0) {
+          // Fallback: just pop if we have something
+          stack.pop();
+        }
+      }
+      
+      // Use stackTop from trace to validate/sync our tracked stack
+      // The trace's stackTop is authoritative - use it to ensure we're in sync
+      if (currentTrace.stackTop && currentTrace.stackTop !== '') {
+        // If our tracked stack top doesn't match trace, rebuild from trace
+        if (stack.length === 0 || stack[stack.length - 1] !== currentTrace.stackTop) {
+          // The trace shows what should be on top - we need to ensure our stack matches
+          // For now, we'll trust the push/pop operations, but use stackTop as validation
+          // If there's a mismatch, it means we missed something - try to sync
+          const expectedTop = currentTrace.stackTop;
+          
+          // If expected top is not on our stack, we might have missed a push
+          if (!stack.includes(expectedTop)) {
+            // Add it (this handles initialization cases)
+            stack.push(expectedTop);
+          } else {
+            // Expected top is in stack but not on top - remove everything above it
+            const symbolIndex = stack.lastIndexOf(expectedTop);
+            if (symbolIndex !== -1 && symbolIndex < stack.length - 1) {
+              stack.splice(symbolIndex + 1);
+            }
+          }
+        }
+      }
+      
+      // Update state with current stack (always show at least bottom marker if empty)
+      const displayStack = stack.length > 0 ? [...stack] : ['$'];
+      setPdaStack(displayStack);
+      setPdaCurrentStep(step);
+      
+      // Check if this is an error step
+      const isError = currentTrace.state === 'ERROR' || 
+                     currentTrace.action.toLowerCase().includes('reject') || 
+                     currentTrace.action.toLowerCase().includes('invalid') || 
+                     currentTrace.action.toLowerCase().includes('expected');
+      
+      if (isError) {
+        if (currentTrace.position !== undefined) {
+          // Map position from HTTP payload to full payload
+          const fullPosition = pdaHttpPayloadOffset >= 0 ? pdaHttpPayloadOffset + currentTrace.position : currentTrace.position;
+          setPdaErrorPosition(fullPosition);
+        }
+      }
+      
+      step += 1;
+    }, 150); // 150ms per step for smooth animation
+
+    simTimersRef.current.push(intervalId);
+  }
 
   // Demo visualization data so the Result View shows something by default
   const demoDfaData = {
@@ -1362,7 +1533,12 @@ const MagicBento = ({
                         </TabsList>
                         <TabsContent value="payload">
                           <div style={{ minHeight: computedHexHeight, transition: 'min-height 200ms ease', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem' }}>
-                            <HexView payloadHex={payloadHex} payloadAscii={payloadAscii} highlightedPositions={highlightedPositions} matchedPatterns={matchedPatterns} />
+                            <HexView 
+                              payloadHex={payloadHex} 
+                              payloadAscii={payloadAscii} 
+                              highlightedPositions={pdaErrorPosition !== null ? [pdaErrorPosition] : highlightedPositions} 
+                              matchedPatterns={matchedPatterns} 
+                            />
                           </div>
                         </TabsContent>
                         <TabsContent value="protocol">
@@ -1435,8 +1611,28 @@ const MagicBento = ({
                                         marginBottom: '0.75rem'
                                       }}>
                                         Status: {pdaStatus === 'approved' ? 'VALID HTTP' : pdaStatus === 'malicious' ? 'INVALID HTTP' : 'VALIDATING...'}
+                                        {pdaErrorPosition !== null && (
+                                          <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', fontWeight: 400 }}>
+                                            (Error at position {pdaErrorPosition})
+                                          </span>
+                                        )}
                                       </div>
-                                      {renderPdaTrace(pdaTrace)}
+                                      <div style={{ 
+                                      display: 'grid', 
+                                      gridTemplateColumns: !isMobile ? '1fr 300px' : '1fr', 
+                                      gap: '1rem', 
+                                      marginBottom: '0.75rem' 
+                                    }}>
+                                        <div style={{ minWidth: 0 }}>
+                                          {renderPdaTrace(pdaTrace)}
+                                        </div>
+                                        <div style={{ minWidth: 0 }}>
+                                          <StackVisualizer 
+                                            stack={pdaStack} 
+                                            currentState={pdaTrace[pdaCurrentStep]?.state}
+                                          />
+                                        </div>
+                                      </div>
                                     </div>
                                   </div>
                                 )}
@@ -1473,7 +1669,12 @@ const MagicBento = ({
                       </TabsList>
                       <TabsContent value="payload">
                         <div style={{ minHeight: computedHexHeight, transition: 'min-height 200ms ease', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem' }}>
-                          <HexView payloadHex={payloadHex} payloadAscii={payloadAscii} highlightedPositions={highlightedPositions} matchedPatterns={matchedPatterns} />
+                          <HexView 
+                            payloadHex={payloadHex} 
+                            payloadAscii={payloadAscii} 
+                            highlightedPositions={pdaErrorPosition !== null ? [pdaErrorPosition] : highlightedPositions} 
+                            matchedPatterns={matchedPatterns} 
+                          />
                         </div>
                       </TabsContent>
                       <TabsContent value="protocol">
@@ -1543,11 +1744,31 @@ const MagicBento = ({
                                       color: pdaStatus === 'approved' ? '#22c55e' : pdaStatus === 'malicious' ? '#ef4444' : '#a8adc5',
                                       fontSize: '0.85rem',
                                       fontWeight: 600,
-                                      marginBottom: '0.5rem'
+                                      marginBottom: '0.75rem'
                                     }}>
                                       Status: {pdaStatus === 'approved' ? 'VALID HTTP' : pdaStatus === 'malicious' ? 'INVALID HTTP' : 'VALIDATING...'}
+                                      {pdaErrorPosition !== null && (
+                                        <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', fontWeight: 400 }}>
+                                          (Error at position {pdaErrorPosition})
+                                        </span>
+                                      )}
                                     </div>
-                                    {renderPdaTrace(pdaTrace)}
+                                    <div style={{ 
+                                      display: 'grid', 
+                                      gridTemplateColumns: !isMobile ? '1fr 300px' : '1fr', 
+                                      gap: '1rem', 
+                                      marginBottom: '0.75rem' 
+                                    }}>
+                                      <div style={{ minWidth: 0 }}>
+                                        {renderPdaTrace(pdaTrace)}
+                                      </div>
+                                      <div style={{ minWidth: 0 }}>
+                                        <StackVisualizer 
+                                          stack={pdaStack} 
+                                          currentState={pdaTrace[pdaCurrentStep]?.state}
+                                        />
+                                      </div>
+                                    </div>
                                   </div>
                                 </div>
                               )}
