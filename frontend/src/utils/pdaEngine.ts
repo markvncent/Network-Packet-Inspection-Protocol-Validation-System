@@ -207,19 +207,19 @@ export class PDAEngine {
                 this.contentLengthRemaining = -1;
               }
             }
-          } else {
-            this.consecutiveCRLFs = 0;
+          } else if (/[a-zA-Z]/.test(c)) {
+            // Start of a new header line
+            this.consecutiveCRLFs = 0; // reset because new header starts
             this.lastWasCR = false;
-            if (/[a-zA-Z]/.test(c)) {
-              this.state = PDAState.HEADER_NAME;
-              this.currentHeaderName = c.toLowerCase();
-              this.currentHeaderValue = '';
-              this.log(c, 'begin HEADER_NAME', i);
-            } else {
-              this.log(c, 'invalid header start', i);
-              this.state = PDAState.ERROR;
-              return false;
-            }
+            this.state = PDAState.HEADER_NAME;
+            this.currentHeaderName = c.toLowerCase();
+            this.currentHeaderValue = '';
+            this.log(c, 'begin HEADER_NAME', i);
+          } else {
+            // Invalid header start character
+            this.log(c, 'invalid header start', i);
+            this.state = PDAState.ERROR;
+            return false;
           }
           break;
 
@@ -313,34 +313,41 @@ export class PDAEngine {
       }
     }
 
-    // After input exhausted, determine acceptance
-    if (this.state === PDAState.BODY) {
-      if (this.contentLengthRemaining >= 0) {
-        if (this.bodyBytesConsumed === this.contentLengthRemaining) {
-          this.log('', 'ACCEPT (body length matched)', httpMessage.length);
-          this.state = PDAState.ACCEPT;
-          this.popMarker('end request (R)');
-          return true;
-        } else {
-          this.log('', 'REJECT (body length mismatch)', httpMessage.length);
-          this.state = PDAState.ERROR;
-          return false;
-        }
-      } else {
-        this.log('', 'ACCEPT (EOF terminates body)', httpMessage.length);
-        this.state = PDAState.ACCEPT;
-        this.popMarker('end request (R)');
-        return true;
-      }
-    }
-
-    if (this.state === PDAState.HEADERS && this.consecutiveCRLFs === 2) {
-      this.log('', 'ACCEPT (no body)', httpMessage.length);
+    if (this.state === PDAState.HEADERS && this.consecutiveCRLFs >= 1) {
+      this.log('', 'ACCEPT (EOF after valid header termination)', trimmed.length);
       this.state = PDAState.ACCEPT;
       this.popMarker('end request (R)');
       return true;
+  }
+    // After input exhausted, determine acceptance
+    if (this.state === PDAState.BODY) {
+        if (this.contentLengthRemaining >= 0) {
+            if (this.bodyBytesConsumed === this.contentLengthRemaining) {
+                this.log('', 'ACCEPT (body length matched)', trimmed.length);
+                this.state = PDAState.ACCEPT;
+                this.popMarker('end request (R)');
+                return true;
+            } else {
+                this.log('', 'REJECT (body length mismatch)', trimmed.length);
+                this.state = PDAState.ERROR;
+                return false;
+            }
+        } else {
+            this.log('', 'ACCEPT (EOF terminates body)', trimmed.length);
+            this.state = PDAState.ACCEPT;
+            this.popMarker('end request (R)');
+            return true;
+        }
     }
 
+    if (this.state === PDAState.HEADERS) {
+        if (this.consecutiveCRLFs >= 1) {
+            this.log('', 'ACCEPT (EOF after valid header termination)', trimmed.length);
+            this.state = PDAState.ACCEPT;
+            this.popMarker('end request (R)');
+            return true;
+        }
+    }
     this.log('', 'REJECT (input ended in state other than BODY/HEADERS)', httpMessage.length);
     this.state = PDAState.ERROR;
     return false;

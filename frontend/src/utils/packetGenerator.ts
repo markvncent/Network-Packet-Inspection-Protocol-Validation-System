@@ -27,6 +27,8 @@ export interface GeneratedPacket {
   generationLog: string[];
 }
 
+import { PDAEngine } from './pdaEngine';
+
 /**
  * Generate a random IP address
  */
@@ -326,13 +328,29 @@ export const generatePacket = (options: PacketGeneratorOptions): GeneratedPacket
   } else {
     // Valid protocol with specified payload type
     const payloadType = options.payloadType || 'benign';
-    const result = generateValidHTTP(payloadType, log);
+
+    // Try to generate a PDA-valid HTTP request; retry a few times if PDA rejects
+    let attempts = 0;
+    let validResult: { payload: string; hex: string } | null = null;
+    while (attempts < 3 && !validResult) {
+      const candidate = generateValidHTTP(payloadType, log);
+      const pda = new PDAEngine();
+      const ok = pda.validate(candidate.payload);
+      if (ok) {
+        validResult = candidate;
+      } else {
+        log.push(`PDA self-check failed on attempt ${attempts + 1}, regenerating...`);
+      }
+      attempts++;
+    }
+
+    const result = validResult ?? generateValidHTTP(payloadType, log);
     payload = result.payload;
     packetType = payloadType;
     isValidProtocol = true;
     if (payloadType === 'malicious') {
       anomalies.push('Malicious payload patterns detected');
-  }
+    }
   }
 
   const flags = packetType === 'benign' ? ['SYN', 'ACK'] : ['SYN'];
@@ -408,6 +426,8 @@ export const exportPacketAsText = (packet: GeneratedPacket): string => {
   content += packet.payload;
   content += `\n\n--- Generation Log ---\n`;
   content += packet.generationLog.join('\n');
+  content += `\n\n--- PCAP (base64) ---\n`;
+  content += packet.pcapBase64;
 
   return content;
 };

@@ -545,6 +545,62 @@ const MagicBento = ({
   const [pdaTrace, setPdaTrace] = useState<PDATrace[]>([]);
   const [pdaController] = useState(() => new PDAController());
 
+  const renderPdaTrace = (trace: PDATrace[]) => {
+    if (!trace || trace.length === 0) {
+      return (
+        <div style={{ color: '#a8adc5', fontSize: '0.85rem', textAlign: 'center', padding: '1rem' }}>
+          PDA trace will appear here after validation.
+        </div>
+      );
+    }
+
+    const maxSteps = 120;
+    const sliced = trace.slice(-maxSteps);
+
+    const badgeStyle = (state: string) => {
+      if (state === 'ACCEPT') return { background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.4)' };
+      if (state === 'ERROR') return { background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.4)' };
+      return { background: 'rgba(168,85,247,0.15)', color: '#c4b5fd', border: '1px solid rgba(168,85,247,0.35)' };
+    };
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#cbd5f5', fontSize: '0.9rem', fontWeight: 600 }}>
+          <span>PDA Trace (last {Math.min(trace.length, maxSteps)} of {trace.length} steps)</span>
+          <span style={{ color: '#a8adc5', fontSize: '0.8rem' }}>State / Input / Action</span>
+        </div>
+        <div style={{ maxHeight: '320px', overflowY: 'auto', background: 'rgba(2,6,23,0.6)', border: '1px solid rgba(168,85,247,0.2)', borderRadius: '0.5rem' }}>
+          {sliced.map((t, idx) => {
+            const isError = t.state === 'ERROR' || t.action.toLowerCase().includes('reject') || t.action.toLowerCase().includes('invalid');
+            return (
+              <div
+                key={`${idx}-${t.state}-${t.input}-${t.action}`}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '60px 110px 1fr',
+                  gap: '0.5rem',
+                  alignItems: 'center',
+                  padding: '0.5rem 0.75rem',
+                  borderBottom: idx === sliced.length - 1 ? 'none' : '1px solid rgba(148,163,184,0.1)',
+                  background: isError ? 'rgba(239,68,68,0.08)' : 'transparent'
+                }}
+              >
+                <span style={{ color: '#a8adc5', fontSize: '0.8rem' }}>#{trace.length - sliced.length + idx + 1}</span>
+                <span style={{ ...badgeStyle(t.state), padding: '0.2rem 0.4rem', borderRadius: '0.4rem', fontSize: '0.75rem', textAlign: 'center' }}>
+                  {t.state}
+                </span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.8rem', color: '#cbd5f5' }}>
+                  <div><span style={{ color: '#94a3b8' }}>Input:</span> {t.input === '' ? '␀ (EOF)' : JSON.stringify(t.input)}</div>
+                  <div style={{ color: isError ? '#ef4444' : '#cbd5f5' }}>{t.action}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   // Hex view sizing (compute after payload state is available)
   const bytesPerLine = 16;
   const maxHexViewHeight = 400; // px
@@ -1376,40 +1432,11 @@ const MagicBento = ({
                                         color: pdaStatus === 'approved' ? '#22c55e' : pdaStatus === 'malicious' ? '#ef4444' : '#a8adc5',
                                         fontSize: '0.85rem',
                                         fontWeight: 600,
-                                        marginBottom: '0.5rem'
+                                        marginBottom: '0.75rem'
                                       }}>
                                         Status: {pdaStatus === 'approved' ? 'VALID HTTP' : pdaStatus === 'malicious' ? 'INVALID HTTP' : 'VALIDATING...'}
                                       </div>
-                                      <div style={{ fontSize: '0.75rem', color: '#a8adc5', marginBottom: '0.75rem' }}>
-                                        Trace Steps: {pdaTrace.length}
-                                      </div>
-                                      <div style={{ 
-                                        maxHeight: '200px', 
-                                        overflowY: 'auto', 
-                                        fontSize: '0.7rem', 
-                                        fontFamily: 'monospace',
-                                        color: '#cbd5f5',
-                                        backgroundColor: 'rgba(2, 6, 23, 0.5)',
-                                        padding: '0.5rem',
-                                        borderRadius: '0.25rem'
-                                      }}>
-                                        {pdaTrace.slice(0, 50).map((step, idx) => (
-                                          <div key={idx} style={{ 
-                                            padding: '0.25rem 0',
-                                            borderBottom: idx < pdaTrace.length - 1 ? '1px solid rgba(168, 85, 247, 0.1)' : 'none'
-                                          }}>
-                                            <span style={{ color: '#a855f7' }}>[{step.state}]</span>{' '}
-                                            <span style={{ color: '#60a5fa' }}>Input={step.input}</span>{' '}
-                                            <span style={{ color: '#fbbf24' }}>Stack={step.stackTop}</span>{' '}
-                                            <span style={{ color: '#cbd5f5' }}>{step.action}</span>
-                                          </div>
-                                        ))}
-                                        {pdaTrace.length > 50 && (
-                                          <div style={{ color: '#a8adc5', paddingTop: '0.5rem', fontStyle: 'italic' }}>
-                                            ... and {pdaTrace.length - 50} more steps
-                                          </div>
-                                        )}
-                                      </div>
+                                      {renderPdaTrace(pdaTrace)}
                                     </div>
                                   </div>
                                 )}
@@ -1520,36 +1547,7 @@ const MagicBento = ({
                                     }}>
                                       Status: {pdaStatus === 'approved' ? 'VALID HTTP' : pdaStatus === 'malicious' ? 'INVALID HTTP' : 'VALIDATING...'}
                                     </div>
-                                    <div style={{ fontSize: '0.75rem', color: '#a8adc5', marginBottom: '0.75rem' }}>
-                                      Trace Steps: {pdaTrace.length}
-                                    </div>
-                                    <div style={{ 
-                                      maxHeight: '200px', 
-                                      overflowY: 'auto', 
-                                      fontSize: '0.7rem', 
-                                      fontFamily: 'monospace',
-                                      color: '#cbd5f5',
-                                      backgroundColor: 'rgba(2, 6, 23, 0.5)',
-                                      padding: '0.5rem',
-                                      borderRadius: '0.25rem'
-                                    }}>
-                                      {pdaTrace.slice(0, 50).map((step, idx) => (
-                                        <div key={idx} style={{ 
-                                          padding: '0.25rem 0',
-                                          borderBottom: idx < pdaTrace.length - 1 ? '1px solid rgba(168, 85, 247, 0.1)' : 'none'
-                                        }}>
-                                          <span style={{ color: '#a855f7' }}>[{step.state}]</span>{' '}
-                                          <span style={{ color: '#60a5fa' }}>Input={step.input}</span>{' '}
-                                          <span style={{ color: '#fbbf24' }}>Stack={step.stackTop}</span>{' '}
-                                          <span style={{ color: '#cbd5f5' }}>{step.action}</span>
-                                        </div>
-                                      ))}
-                                      {pdaTrace.length > 50 && (
-                                        <div style={{ color: '#a8adc5', paddingTop: '0.5rem', fontStyle: 'italic' }}>
-                                          ... and {pdaTrace.length - 50} more steps
-                                        </div>
-                                      )}
-                                    </div>
+                                    {renderPdaTrace(pdaTrace)}
                                   </div>
                                 </div>
                               )}
