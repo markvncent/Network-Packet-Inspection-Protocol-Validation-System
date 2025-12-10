@@ -18,9 +18,20 @@ type CardDefinition = {
   description: string;
   label: string;
   layoutClass: string;
+  isPlaceholder?: boolean;
+  isHeader?: boolean;
+  placeholderLabel?: string;
 };
 
 const cardData: CardDefinition[] = [
+  {
+    color: "#060010",
+    title: "",
+    description: "",
+    label: "Header",
+    layoutClass: "magic-bento-card--header magic-bento-card--placeholder",
+    isHeader: true
+  },
   {
     color: "#060010",
     title: "Upload or Add Packet",
@@ -1004,16 +1015,6 @@ const MagicBento = ({
 
   return (
     <section className="magic-bento-wrapper">
-      <header className="magic-bento-header">
-        <div>
-          <p className="magic-bento-eyebrow">Automata Network Protocol Inspector</p>
-          <h1>Packet Inspection & HTTP PDA Validation</h1>
-          <p className="magic-bento-subtitle">
-            Upload packets, trigger DFA matching + PDA validation, and visualize the automata traversal results.
-          </p>
-        </div>
-      </header>
-
       {enableSpotlight && (
         <GlobalSpotlight
           gridRef={gridRef}
@@ -1037,6 +1038,28 @@ const MagicBento = ({
               "--glow-color": glowColor
             } as React.CSSProperties
           };
+
+          if (card.isHeader) {
+            return (
+              <ParticleCard key={index} {...cardProps} disableAnimations={shouldDisableAnimations}>
+                <div className="magic-bento-card__content placeholder-content header-placeholder">
+                  <p className="header-course">CS311: Automata Theory and Formal Langauges</p>
+                  <h1 className="header-title">PACKET PAYLOAD INSPECTOR w/ HTTP PROTOCOL VALIDATION</h1>
+                  <p className="header-authors">Chiong, H., Bentuzal, C. L., Limpahan, M. V., Silmaro, J.</p>
+                </div>
+              </ParticleCard>
+            );
+          }
+
+          if (card.isPlaceholder) {
+            return (
+              <ParticleCard key={index} {...cardProps} disableAnimations={shouldDisableAnimations}>
+                <div className="magic-bento-card__content placeholder-content header-placeholder">
+                  <div className="placeholder-label">{card.placeholderLabel || card.label}</div>
+                </div>
+              </ParticleCard>
+            );
+          }
 
           if (card.label === "Packet Intake") {
             const uploadCardContent = (

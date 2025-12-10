@@ -332,7 +332,7 @@ export const generatePacket = (options: PacketGeneratorOptions): GeneratedPacket
     isValidProtocol = true;
     if (payloadType === 'malicious') {
       anomalies.push('Malicious payload patterns detected');
-    }
+  }
   }
 
   const flags = packetType === 'benign' ? ['SYN', 'ACK'] : ['SYN'];

@@ -108,8 +108,8 @@ export const PacketGeneratorModal = ({ isOpen, onClose }: PacketGeneratorModalPr
             </TabsList>
 
             <TabsContent value="configure" className="generator-tab-content">
-              <div className="generator-controls">
-                <div className="control-group">
+          <div className="generator-controls">
+            <div className="control-group">
                   <label>Packet Configuration</label>
                   <p className="option-description">
                     Select a combination of payload type and protocol structure
@@ -171,13 +171,13 @@ export const PacketGeneratorModal = ({ isOpen, onClose }: PacketGeneratorModalPr
                       </div>
                     </button>
                   </div>
-                </div>
+            </div>
 
-                <button 
-                  className="generate-btn" 
-                  onClick={handleGenerate}
-                  disabled={isGenerating}
-                >
+            <button 
+              className="generate-btn" 
+              onClick={handleGenerate}
+              disabled={isGenerating}
+            >
                   {isGenerating ? 'Generating...' : 'Generate Packet'}
                 </button>
               </div>
@@ -199,8 +199,8 @@ export const PacketGeneratorModal = ({ isOpen, onClose }: PacketGeneratorModalPr
                   disabled={isGenerating}
                 >
                   {isGenerating ? 'Generating...' : 'Generate Random Packet'}
-                </button>
-              </div>
+            </button>
+          </div>
             </TabsContent>
           </Tabs>
 
