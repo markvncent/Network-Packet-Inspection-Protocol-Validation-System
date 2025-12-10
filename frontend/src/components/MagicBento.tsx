@@ -6,6 +6,8 @@ import StackVisualizer from './StackVisualizer';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { PDAController } from '../utils/pdaController';
 import { PDATrace, PDAState } from '../utils/pdaEngine';
+import { DFAInspectorController } from '../utils/dfaInspectorController';
+import { DEFAULT_MALICIOUS_PATTERNS } from '../utils/dfaInspector';
 import "./MagicBento.css";
 
 const DEFAULT_PARTICLE_COUNT = 12;
@@ -551,6 +553,9 @@ const MagicBento = ({
   const [pdaIsAnimating, setPdaIsAnimating] = useState<boolean>(false);
   const [pdaHttpPayloadOffset, setPdaHttpPayloadOffset] = useState<number>(0);
 
+  // DFA Inspector instance
+  const [dfaInspectorController] = useState(() => new DFAInspectorController(DEFAULT_MALICIOUS_PATTERNS, false));
+
   const renderPdaTrace = (trace: PDATrace[]) => {
     if (!trace || trace.length === 0) {
       return (
@@ -645,66 +650,8 @@ const MagicBento = ({
   const hexLineCount = Math.max(1, Math.ceil(payloadByteCount / bytesPerLine));
   const computedHexHeight = Math.min(maxHexViewHeight, Math.max(minHexViewHeight, 24 + hexLineCount * 32));
 
-  // Basic pattern set — replaceable with a fetch to /patterns
-  const maliciousPatterns = [
-    'virus', 'malware', 'exploit', 'ransom', 'trojan', 'backdoor', 'rootkit',
-    '<script', '</script', '<iframe', 'eval', 'base64',
-    "' OR 1", 'UNION SELECT', 'DROP TABLE',
-    'login', 'verify', 'password', 'account',
-    ';r', '&&w', '|b'
-  ];
-
-  // Build a simple Aho-Corasick automaton (trie with fail links)
-  function buildAC(patterns: string[]) {
-    const nodes: any[] = [{ edges: new Map<string, number>(), fail: 0, output: [] }];
-
-    for (const pat of patterns) {
-      let node = 0;
-      for (const ch of pat) {
-        const key = ch;
-        const nxt = nodes[node].edges.get(key);
-        if (nxt === undefined) {
-          nodes.push({ edges: new Map<string, number>(), fail: 0, output: [] });
-          const newIdx = nodes.length - 1;
-          nodes[node].edges.set(key, newIdx);
-          node = newIdx;
-        } else {
-          node = nxt;
-        }
-      }
-      nodes[node].output.push(pat);
-    }
-
-    // failure links
-    const q: number[] = [];
-    for (const [k, v] of nodes[0].edges) {
-      nodes[v].fail = 0;
-      q.push(v);
-    }
-    while (q.length) {
-      const r = q.shift()!;
-      for (const [a, s] of nodes[r].edges) {
-        q.push(s);
-        let state = nodes[r].fail;
-        while (state !== 0 && !nodes[state].edges.has(a)) {
-          state = nodes[state].fail;
-        }
-        if (nodes[state].edges.has(a)) {
-          nodes[s].fail = nodes[state].edges.get(a)!;
-        } else {
-          nodes[s].fail = 0;
-        }
-        nodes[s].output = nodes[s].output.concat(nodes[nodes[s].fail].output || []);
-      }
-    }
-
-    const trieNodes = nodes.map((n, idx) => ({ id: idx, fail: n.fail ?? 0, output: n.output || [] }));
-    const trieEdges: any[] = [];
-    nodes.forEach((n, idx) => {
-      for (const [k, v] of n.edges) trieEdges.push({ from: idx, input: k, to: v });
-    });
-    return { nodes: trieNodes, edges: trieEdges, rawNodes: nodes };
-  }
+  // DFA inspection uses the modular DFAInspectorController
+  // Patterns are managed by the inspector instance
 
   async function parseFile(file: File) {
     const name = file.name.toLowerCase();
@@ -818,33 +765,42 @@ const MagicBento = ({
   };
 
   const handleDfaInspection = () => {
-    // Run AC-based traversal animation over the uploaded payload
+    // Run DFA inspection using modular DFAInspectorController
     setDfaStatus('inspecting');
     clearSimulationTimers();
     setMatchedPatterns([]);
     setHighlightedPositions([]);
-    runACSimulation();
+    runDFASimulation();
   };
 
-  function runACSimulation() {
+  function runDFASimulation() {
     if (!payloadBytes || payloadBytes.length === 0) {
       setDfaStatus('approved');
       return;
     }
 
-    // build lowercase patterns for case-insensitive matching
-    const pats = maliciousPatterns.map(p => p.toLowerCase());
-    const ac = buildAC(pats);
-    setActiveTrieData({ nodes: ac.nodes, edges: ac.edges });
+    // Load payload into DFA inspector
+    dfaInspectorController.loadPayload(payloadBytes);
+    
+    // Get trie data for visualization
+    const trieData = dfaInspectorController.getTrieData();
+    if (trieData) {
+      setActiveTrieData({ nodes: trieData.nodes, edges: trieData.edges });
+    }
 
-    const raw = ac.rawNodes; // array with edges Map, fail, output
-    let state = 0;
-    let i = 0;
-    const matches: Array<{ pattern: string; position: number }> = [];
+    // Reset inspector state
+    dfaInspectorController.reset();
 
+    let prevNodeId = 0; // Track previous node for edge animation
+
+    // Run step-by-step simulation
     const intervalId = window.setInterval(() => {
-      if (i >= payloadBytes.length) {
+      const step = dfaInspectorController.step();
+      
+      if (!step) {
+        // Inspection complete
         window.clearInterval(intervalId);
+        const matches = dfaInspectorController.getMatches();
         if (matches.length > 0) {
           setDfaStatus('malicious');
           setMatchedPatterns(matches);
@@ -854,37 +810,31 @@ const MagicBento = ({
         return;
       }
 
-      const b = payloadBytes[i];
-      const ch = String.fromCharCode(b).toLowerCase();
-      let prev = state;
+      const state = dfaInspectorController.getState();
+      if (!state) return;
 
-      // follow transitions with fail links
-      while (state !== 0 && !raw[state].edges.has(ch)) {
-        state = raw[state].fail;
-      }
-      if (raw[state].edges.has(ch)) state = raw[state].edges.get(ch);
+      // Animate edge from previous node to current node
+      setTrieAnimatedEdges([{ from: prevNodeId, to: step.nodeId }]);
 
-      // highlight node and edge in visualizer
-      setTrieHighlightedNode(state);
-      setTrieAnimatedEdges([{ from: prev, to: state }]);
+      // Highlight current node
+      setTrieHighlightedNode(step.nodeId);
 
-      // highlight current byte
-      setHighlightedPositions([i]);
+      // Highlight current byte position
+      setHighlightedPositions([state.currentStep]);
 
-      // check outputs
-      if (raw[state].output && raw[state].output.length > 0) {
-        for (const pat of raw[state].output) {
-          const pos = i - pat.length + 1;
-          matches.push({ pattern: pat, position: Math.max(0, pos) });
+      // Update matches if any found
+      if (state.currentMatches.length > 0) {
+        setMatchedPatterns([...state.currentMatches]);
+        // Stop on first match and mark malicious
+        if (state.isMalicious) {
+          setDfaStatus('malicious');
+          window.clearInterval(intervalId);
+          return;
         }
-        // stop on first match and mark malicious
-        setMatchedPatterns(matches);
-        setDfaStatus('malicious');
-        window.clearInterval(intervalId);
-        return;
       }
 
-      i += 1;
+      // Update previous node for next iteration
+      prevNodeId = step.nodeId;
     }, 120);
 
     simTimersRef.current.push(intervalId);
