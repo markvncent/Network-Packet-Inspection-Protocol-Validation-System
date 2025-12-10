@@ -33,11 +33,10 @@
   padding: 1rem;
 }
 
-/* Ensure MagicBento uses the app's global UI font stack */
 .magic-bento-wrapper,
 .card-grid,
 .magic-bento-card {
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif;
+  font-family: inherit;
 }
 
 .magic-bento-card {
