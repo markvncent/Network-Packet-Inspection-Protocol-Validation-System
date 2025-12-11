@@ -3,11 +3,12 @@ import { gsap } from "gsap";
 import PacketGeneratorModal from "./PacketGenerator";
 import HexView from './HexView';
 import StackVisualizer from './StackVisualizer';
+import PatternStateDiagram from './PatternStateDiagram';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { PDAController } from '../utils/pdaController';
 import { PDATrace, PDAState } from '../utils/pdaEngine';
 import { DFAInspectorController } from '../utils/dfaInspectorController';
-import { DEFAULT_MALICIOUS_PATTERNS } from '../utils/dfaInspector';
+import { DEFAULT_MALICIOUS_PATTERNS, MatchStep } from '../utils/dfaInspector';
 import "./MagicBento.css";
 
 const DEFAULT_PARTICLE_COUNT = 12;
@@ -555,6 +556,8 @@ const MagicBento = ({
 
   // DFA Inspector instance
   const [dfaInspectorController] = useState(() => new DFAInspectorController(DEFAULT_MALICIOUS_PATTERNS, false));
+  const [dfaCurrentStep, setDfaCurrentStep] = useState<MatchStep | null>(null);
+  const [dfaIsComplete, setDfaIsComplete] = useState<boolean>(false);
 
   const renderPdaTrace = (trace: PDATrace[]) => {
     if (!trace || trace.length === 0) {
@@ -790,6 +793,9 @@ const MagicBento = ({
 
     // Reset inspector state
     dfaInspectorController.reset();
+    setDfaIsComplete(false);
+    setDfaCurrentStep(null);
+    setDfaStatus('inspecting');
 
     let prevNodeId = 0; // Track previous node for edge animation
 
@@ -800,6 +806,7 @@ const MagicBento = ({
       if (!step) {
         // Inspection complete
         window.clearInterval(intervalId);
+        setDfaIsComplete(true);
         const matches = dfaInspectorController.getMatches();
         if (matches.length > 0) {
           setDfaStatus('malicious');
@@ -812,6 +819,9 @@ const MagicBento = ({
 
       const state = dfaInspectorController.getState();
       if (!state) return;
+
+      // Update current step for pattern diagram
+      setDfaCurrentStep(step);
 
       // Animate edge from previous node to current node
       setTrieAnimatedEdges([{ from: prevNodeId, to: step.nodeId }]);
@@ -828,6 +838,7 @@ const MagicBento = ({
         // Stop on first match and mark malicious
         if (state.isMalicious) {
           setDfaStatus('malicious');
+          setDfaIsComplete(true);
           window.clearInterval(intervalId);
           return;
         }
@@ -1482,13 +1493,26 @@ const MagicBento = ({
                           <TabsTrigger value="protocol">Protocol</TabsTrigger>
                         </TabsList>
                         <TabsContent value="payload">
-                          <div style={{ minHeight: computedHexHeight, transition: 'min-height 200ms ease', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem' }}>
-                            <HexView 
-                              payloadHex={payloadHex} 
-                              payloadAscii={payloadAscii} 
-                              highlightedPositions={pdaErrorPosition !== null ? [pdaErrorPosition] : highlightedPositions} 
-                              matchedPatterns={matchedPatterns} 
-                            />
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                            <div style={{ minHeight: computedHexHeight, transition: 'min-height 200ms ease', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '0.5rem' }}>
+                              <HexView 
+                                payloadHex={payloadHex} 
+                                payloadAscii={payloadAscii} 
+                                highlightedPositions={pdaErrorPosition !== null ? [pdaErrorPosition] : highlightedPositions} 
+                                matchedPatterns={matchedPatterns} 
+                              />
+                            </div>
+                            {payloadBytes && payloadBytes.length > 0 && (
+                              <div style={{ padding: '0.5rem' }}>
+                                <PatternStateDiagram
+                                  patterns={DEFAULT_MALICIOUS_PATTERNS}
+                                  currentStep={dfaCurrentStep}
+                                  currentMatches={matchedPatterns}
+                                  isComplete={dfaIsComplete}
+                                  isMalicious={dfaStatus === 'malicious'}
+                                />
+                              </div>
+                            )}
                           </div>
                         </TabsContent>
                         <TabsContent value="protocol">
