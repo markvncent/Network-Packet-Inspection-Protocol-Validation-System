@@ -19,7 +19,7 @@ export interface PacketGeneratorOptions {
 export interface GeneratedPacket {
   timestamp: string;
   type: 'benign' | 'malicious';
-  protocol: 'HTTP';
+  protocol: 'HTTP' | 'HTTP-INVALID';
   rawHex: string;
   payload: string;
   pcapBase64: string;
@@ -137,85 +137,49 @@ const insertMaliciousPatterns = (
 };
 
 /**
- * Generate valid HTTP request (PDA-compatible)
+ * Generate valid HTTP request (PDA-compatible) - SHORT VERSION
  */
 const generateValidHTTP = (
   payloadType: 'benign' | 'malicious',
   log: string[]
 ): { hex: string; payload: string } => {
-  const methods = ['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS'];
-  const paths = [
-    '/api/users', '/index.html', '/api/data', '/static/img.png', '/search',
-    '/admin', '/login', '/api/v1/endpoint', '/test?q=value', '/path/to/resource'
-  ];
-  const hosts = ['example.com', 'api.example.com', 'cdn.example.com', 'test.example.org'];
-  
+  const methods = ['GET', 'POST', 'PUT'];
+  const paths = ['/api', '/test', '/data', '/index.html', '/search'];
+  const hosts = ['example.com', 'api.com', 'test.org'];
+
   // Randomize method, path, host
   const method = methods[Math.floor(Math.random() * methods.length)];
   const path = paths[Math.floor(Math.random() * paths.length)];
   const host = hosts[Math.floor(Math.random() * hosts.length)];
-  
-  // Randomize header casing
-  const headerCase = Math.random() < 0.33 ? 'lower' : Math.random() < 0.66 ? 'upper' : 'mixed';
-  const formatHeader = (name: string): string => {
-    if (headerCase === 'lower') return name.toLowerCase();
-    if (headerCase === 'upper') return name.toUpperCase();
-    return name; // Mixed case (default)
-  };
-  
+
   // Build request line
   let httpPayload = `${method} ${path} HTTP/1.1\r\n`;
   
-  // Build headers with randomization
-  const headerNames = ['Host', 'User-Agent', 'Accept', 'Connection', 'Referer', 'Cookie', 'Content-Type'];
-  const selectedHeaders = new Set<string>();
+  // Build minimal headers (1-2 headers only for shorter packets)
+  httpPayload += `Host: ${host}\r\n`;
   
-  // Always include Host
-  httpPayload += `${formatHeader('Host')}: ${host}\r\n`;
-  selectedHeaders.add('Host');
-  
-  // Randomly select other headers
-  const numHeaders = Math.floor(Math.random() * 4) + 2; // 2-5 additional headers
-  const availableHeaders = headerNames.filter(h => !selectedHeaders.has(h));
-  
-  for (let i = 0; i < numHeaders && availableHeaders.length > 0; i++) {
-    const headerIdx = Math.floor(Math.random() * availableHeaders.length);
-    const headerName = availableHeaders.splice(headerIdx, 1)[0];
-    selectedHeaders.add(headerName);
-    
-    let headerValue = '';
-    if (headerName === 'User-Agent') {
-      headerValue = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)';
-    } else if (headerName === 'Accept') {
-      headerValue = '*/*';
-    } else if (headerName === 'Connection') {
-      headerValue = 'close';
-    } else if (headerName === 'Referer') {
-      headerValue = `https://${host}/`;
-    } else if (headerName === 'Cookie') {
-      headerValue = 'session=abc123; user=test';
-    } else if (headerName === 'Content-Type') {
-      headerValue = 'application/json';
-    }
-    
-    httpPayload += `${formatHeader(headerName)}: ${headerValue}\r\n`;
+  // Randomly add one optional header (50% chance)
+  if (Math.random() > 0.5) {
+    const optionalHeaders = [
+      { name: 'Accept', value: '*/*' },
+      { name: 'Connection', value: 'close' },
+      { name: 'User-Agent', value: 'Mozilla/5.0' }
+    ];
+    const header = optionalHeaders[Math.floor(Math.random() * optionalHeaders.length)];
+    httpPayload += `${header.name}: ${header.value}\r\n`;
   }
-  
+
   let bodyContent = '';
-  const hasBody = (method === 'POST' || method === 'PUT') && Math.random() > 0.3;
+  const hasBody = (method === 'POST' || method === 'PUT') && Math.random() > 0.5;
   
   if (hasBody) {
-    // Generate body content
-    if (payloadType === 'malicious') {
-      bodyContent = '{"data":"test","id":123}';
-    } else {
-      bodyContent = '{"data":"test","id":123}';
-    }
+    // Short body content
+    bodyContent = payloadType === 'malicious' ? '{"id":1}' : '{"id":1}';
     
     // Add Content-Length header
-    httpPayload += `${formatHeader('Content-Length')}: ${bodyContent.length}\r\n`;
+    httpPayload += `Content-Length: ${bodyContent.length}\r\n`;
   }
-  
+
   // End headers with CRLF CRLF
   httpPayload += `\r\n`;
   
@@ -223,15 +187,15 @@ const generateValidHTTP = (
   if (bodyContent) {
     httpPayload += bodyContent;
   }
-  
+
   // Insert malicious patterns if needed
   if (payloadType === 'malicious') {
-    const numPatterns = Math.floor(Math.random() * 3) + 1; // 1-3 patterns
-    const insertionPoints: Array<'start' | 'middle' | 'end' | 'header-value'> = ['start', 'middle', 'end', 'header-value'];
+    const numPatterns = Math.floor(Math.random() * 2) + 1; // 1-2 patterns (reduced from 1-3)
+    const insertionPoints: Array<'start' | 'middle' | 'end' | 'header-value'> = ['middle', 'end', 'header-value'];
     httpPayload = insertMaliciousPatterns(httpPayload, numPatterns, insertionPoints);
     log.push(`Inserted ${numPatterns} malicious pattern(s) at random positions`);
   }
-  
+
   const hex = Array.from(httpPayload)
     .map(c => c.charCodeAt(0).toString(16).padStart(2, '0'))
     .join('');
@@ -240,68 +204,50 @@ const generateValidHTTP = (
 };
 
 /**
- * Generate invalid HTTP request that breaks PDA but not at position 0
+ * Generate invalid HTTP request that breaks PDA but not at position 0 - SHORT VERSION
  */
 const generateInvalidHTTP = (log: string[]): { hex: string; payload: string } => {
   // Start with valid-looking HTTP to get past position 0
-  const methods = ['GET', 'POST', 'PUT'];
+  const methods = ['GET', 'POST'];
   const method = methods[Math.floor(Math.random() * methods.length)];
   
-  // Generate partial/garbled HTTP that allows PDA to read several characters
+  // Generate short, partial/garbled HTTP that allows PDA to read several characters
   const invalidTypes = [
-    // Corrupted request line (invalid method character)
-    () => {
-      const corruptedMethod = method.slice(0, -1) + String.fromCharCode(0x01) + method.slice(-1);
-      return `${corruptedMethod} /test HTTP/1.1\r\nHost: example.com\r\n\r\n`;
-    },
     // Missing space after method
     () => {
-      return `${method}/test HTTP/1.1\r\nHost: example.com\r\n\r\n`;
+      return `${method}/api HTTP/1.1\r\nHost: test.com\r\n\r\n`;
     },
     // Invalid version format
     () => {
-      return `${method} /test HTP/1.1\r\nHost: example.com\r\n\r\n`;
+      return `${method} /api HTP/1.1\r\nHost: test.com\r\n\r\n`;
     },
     // Missing CRLF after request line (only LF)
     () => {
-      return `${method} /test HTTP/1.1\nHost: example.com\r\n\r\n`;
+      return `${method} /api HTTP/1.1\nHost: test.com\r\n\r\n`;
     },
     // Invalid header format (no colon)
     () => {
-      return `${method} /test HTTP/1.1\r\nHost example.com\r\n\r\n`;
+      return `${method} /api HTTP/1.1\r\nHost test.com\r\n\r\n`;
     },
     // Missing header value
     () => {
-      return `${method} /test HTTP/1.1\r\nHost:\r\n\r\n`;
+      return `${method} /api HTTP/1.1\r\nHost:\r\n\r\n`;
     },
     // Broken CRLF sequence (CR without LF)
     () => {
-      return `${method} /test HTTP/1.1\rHost: example.com\r\n\r\n`;
-    },
-    // Truncated header line
-    () => {
-      return `${method} /test HTTP/1.1\r\nHo:st example.com\r\n\r\n`;
-    },
-    // Mismatched Content-Length
-    () => {
-      return `${method} /test HTTP/1.1\r\nHost: example.com\r\nContent-Length: 20\r\n\r\nShortBody`;
+      return `${method} /api HTTP/1.1\rHost: test.com\r\n\r\n`;
     },
     // Invalid method (lowercase start)
     () => {
-      return `gET /test HTTP/1.1\r\nHost: example.com\r\n\r\n`;
+      return `gET /api HTTP/1.1\r\nHost: test.com\r\n\r\n`;
     },
     // Missing version
     () => {
-      return `${method} /test\r\nHost: example.com\r\n\r\n`;
+      return `${method} /api\r\nHost: test.com\r\n\r\n`;
     },
     // Extra spaces in request line
     () => {
-      return `${method}  /test  HTTP/1.1\r\nHost: example.com\r\n\r\n`;
-    },
-    // Binary noise before valid start
-    () => {
-      const noise = String.fromCharCode(0x01, 0x02, 0x03);
-      return noise + `${method} /test HTTP/1.1\r\nHost: example.com\r\n\r\n`;
+      return `${method}  /api  HTTP/1.1\r\nHost: test.com\r\n\r\n`;
     },
   ];
 
@@ -318,7 +264,7 @@ const generateInvalidHTTP = (log: string[]): { hex: string; payload: string } =>
 };
 
 /**
- * Generate malicious-invalid HTTP (both malicious patterns AND broken structure)
+ * Generate malicious-invalid HTTP (both malicious patterns AND broken structure) - SHORT VERSION
  */
 const generateMaliciousInvalidHTTP = (log: string[]): { hex: string; payload: string } => {
   // Start with a base invalid HTTP structure
@@ -330,32 +276,28 @@ const generateMaliciousInvalidHTTP = (log: string[]): { hex: string; payload: st
     () => {
       const corruptedMethod = method.slice(0, 1) + 'X' + method.slice(2); // e.g., "GPET"
       const malicious = MALICIOUS_PATTERNS[Math.floor(Math.random() * MALICIOUS_PATTERNS.length)];
-      return `${corruptedMethod} /test?q=${malicious} HTTP/1.1\r\nHost: example.com\r\n\r\n`;
+      return `${corruptedMethod} /api?q=${malicious} HTTP/1.1\r\nHost: test.com\r\n\r\n`;
     },
     // Missing colon in headers with malicious pattern
     () => {
       const malicious = MALICIOUS_PATTERNS[Math.floor(Math.random() * MALICIOUS_PATTERNS.length)];
-      return `${method} /test HTTP/1.1\r\nHost ${malicious}.com\r\n\r\n`;
+      return `${method} /api HTTP/1.1\r\nHost ${malicious}.com\r\n\r\n`;
     },
     // Broken CRLF with malicious pattern
     () => {
       const malicious = MALICIOUS_PATTERNS[Math.floor(Math.random() * MALICIOUS_PATTERNS.length)];
-      return `${method} /test HTTP/1.1\nHost: example.com\r\nX-Custom: ${malicious}\r\n\r\n`;
+      return `${method} /api HTTP/1.1\nHost: test.com\r\nX-Custom: ${malicious}\r\n\r\n`;
     },
-    // Mismatched Content-Length with malicious body
+    // Mismatched Content-Length with malicious body (declared length too long to keep full pattern intact)
     () => {
       const malicious = MALICIOUS_PATTERNS[Math.floor(Math.random() * MALICIOUS_PATTERNS.length)];
-      return `${method} /test HTTP/1.1\r\nHost: example.com\r\nContent-Length: 5\r\n\r\n${malicious}`;
-    },
-    // Truncated header with malicious pattern
-    () => {
-      const malicious = MALICIOUS_PATTERNS[Math.floor(Math.random() * MALICIOUS_PATTERNS.length)];
-      return `${method} /test HTTP/1.1\r\nHo:st example.com\r\nUser-Agent: ${malicious}\r\n\r\n`;
+      const declaredLength = malicious.length + 5; // mismatch keeps full body visible while remaining invalid
+      return `${method} /api HTTP/1.1\r\nHost: test.com\r\nContent-Length: ${declaredLength}\r\n\r\n${malicious}`;
     },
     // Invalid method with malicious pattern in path
     () => {
       const malicious = MALICIOUS_PATTERNS[Math.floor(Math.random() * MALICIOUS_PATTERNS.length)];
-      return `gET /${malicious} HTTP/1.1\r\nHost: example.com\r\n\r\n`;
+      return `gET /${malicious} HTTP/1.1\r\nHost: test.com\r\n\r\n`;
     },
   ];
   
@@ -363,20 +305,12 @@ const generateMaliciousInvalidHTTP = (log: string[]): { hex: string; payload: st
   let httpPayload = selectedType();
   
   // Ensure at least one malicious pattern is present
-  // If not already present, add one more
   const hasMalicious = MALICIOUS_PATTERNS.some(p => httpPayload.includes(p));
   if (!hasMalicious) {
     const malicious = MALICIOUS_PATTERNS[Math.floor(Math.random() * MALICIOUS_PATTERNS.length)];
     // Insert in a random position
     const pos = Math.floor(httpPayload.length * 0.3 + Math.random() * httpPayload.length * 0.4);
     httpPayload = httpPayload.slice(0, pos) + malicious + httpPayload.slice(pos);
-  }
-  
-  // Optionally add more malicious patterns
-  const numAdditional = Math.floor(Math.random() * 2); // 0-1 additional
-  if (numAdditional > 0) {
-    const insertionPoints: Array<'start' | 'middle' | 'end' | 'header-value'> = ['middle', 'end'];
-    httpPayload = insertMaliciousPatterns(httpPayload, numAdditional, insertionPoints);
   }
   
   log.push(`Generated malicious-invalid HTTP with structural corruption and malicious patterns`);
@@ -543,11 +477,11 @@ export const generatePacket = (options: PacketGeneratorOptions): GeneratedPacket
       anomalies.push('Invalid HTTP protocol structure');
     } else {
       // Invalid only
-      const result = generateInvalidHTTP(log);
-      payload = result.payload;
-      isValidProtocol = false;
+    const result = generateInvalidHTTP(log);
+    payload = result.payload;
+    isValidProtocol = false;
       packetType = MALICIOUS_PATTERNS.some(p => payload.includes(p)) ? 'malicious' : 'benign';
-      anomalies.push('Invalid HTTP protocol structure');
+    anomalies.push('Invalid HTTP protocol structure');
     }
   } else {
     // Valid protocol with specified payload type
@@ -639,6 +573,11 @@ export const exportPacketAsHex = (packet: GeneratedPacket): string => {
  * Export packet as text file content
  */
 export const exportPacketAsText = (packet: GeneratedPacket): string => {
+  // Escape \r and \n in payload to show them as literal strings
+  const escapedPayload = packet.payload
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n');
+  
   let content = `Packet Generated: ${packet.timestamp}\n`;
   content += `Type: ${packet.type}\n`;
   content += `Protocol: ${packet.protocol}\n`;
@@ -647,7 +586,7 @@ export const exportPacketAsText = (packet: GeneratedPacket): string => {
   content += `Destination IP: ${packet.metadata.destIP}:${packet.metadata.destPort}\n`;
   content += `TCP Flags: ${packet.metadata.flags.join(', ')}\n`;
   content += `\n--- Raw Payload ---\n`;
-  content += packet.payload;
+  content += escapedPayload;
   content += `\n\n--- Generation Log ---\n`;
   content += packet.generationLog.join('\n');
   content += `\n\n--- PCAP (base64) ---\n`;

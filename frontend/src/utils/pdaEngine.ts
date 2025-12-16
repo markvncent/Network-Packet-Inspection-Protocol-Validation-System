@@ -102,7 +102,7 @@ export class PDAEngine {
             return false;
           }
           break;
-      
+
         case PDAState.METHOD:
           if (this.isMethodChar(c)) {
             // Accumulate method character
@@ -128,7 +128,7 @@ export class PDAEngine {
             this.state = PDAState.ERROR;
             return false;
           }
-          break;      
+          break;
 
         case PDAState.SP1:
           if (this.isURIChar(c)) {
@@ -446,8 +446,8 @@ export class PDAEngine {
         return result;
     } else {
         this.log('', 'REJECT (input ended in invalid state)', finalPosition);
-        this.state = PDAState.ERROR;
-        return false;
+    this.state = PDAState.ERROR;
+    return false;
     }
   }
 

@@ -681,45 +681,130 @@ const MagicBento = ({
       if (name.endsWith('.pcap') || name.endsWith('.pcapng')) {
         const ab = await file.arrayBuffer();
         const dv = new DataView(ab);
-        // naive pcap: skip 24-byte global header, read first packet's incl_len
+        
+        // PCAP magic numbers
+        const PCAP_MAGIC_LE = 0xa1b2c3d4; // Little-endian
+        const PCAP_MAGIC_BE = 0xd4c3b2a1; // Big-endian
+        
+        if (dv.byteLength < 24) {
+          console.warn('PCAP file too small');
+          return;
+        }
+        
+        // Check PCAP magic number to determine byte order
+        const magic = dv.getUint32(0, false); // Read as big-endian first
+        const isLittleEndian = magic === PCAP_MAGIC_LE;
+        const isValidPcap = magic === PCAP_MAGIC_LE || magic === PCAP_MAGIC_BE;
+        
+        if (!isValidPcap) {
+          console.warn('Invalid PCAP magic number, attempting to parse anyway');
+        }
+        
+        // Read first packet header (starts at offset 24)
         if (dv.byteLength >= 24 + 16) {
-          const offset = 24;
-          const inclLen = dv.getUint32(offset + 8, true);
-          const pktStart = offset + 16;
+          const packetHeaderOffset = 24;
+          // Packet header: ts_sec(4), ts_usec(4), incl_len(4), orig_len(4)
+          const inclLen = dv.getUint32(packetHeaderOffset + 8, isLittleEndian);
+          
+          if (inclLen === 0 || inclLen > 65535) {
+            console.warn('Invalid packet length:', inclLen);
+            return;
+          }
+          
+          const pktStart = packetHeaderOffset + 16;
           const pktEnd = Math.min(pktStart + inclLen, dv.byteLength);
+          
+          if (pktEnd <= pktStart) {
+            console.warn('Invalid packet bounds');
+            return;
+          }
+          
           const pkt = new Uint8Array(ab.slice(pktStart, pktEnd));
 
           let payloadOffset = 0;
+          let srcIP = '';
+          let dstIP = '';
+          let protocol = 'unknown';
+          
+          // Parse Ethernet frame (14 bytes minimum)
           if (pkt.length >= 14) {
+            // Check for Ethernet II frame (most common)
             const etherType = (pkt[12] << 8) | pkt[13];
+            
             if (etherType === 0x0800 && pkt.length >= 14 + 20) {
+              // IPv4 packet
               const ipHeaderStart = 14;
-              const ihl = (pkt[ipHeaderStart] & 0x0f) * 4;
-              const protocol = pkt[ipHeaderStart + 9];
-              const srcIP = pkt.slice(ipHeaderStart + 12, ipHeaderStart + 16).join('.');
-              const dstIP = pkt.slice(ipHeaderStart + 16, ipHeaderStart + 20).join('.');
-              if (protocol === 6 && pkt.length >= 14 + ihl + 20) {
-                const tcpStart = 14 + ihl;
-                const dataOffset = ((pkt[tcpStart + 12] & 0xf0) >> 4) * 4;
-                payloadOffset = 14 + ihl + dataOffset;
-                setPacketInfo({ srcIP, dstIP, protocol: 'TCP', length: pkt.length });
-              } else if (protocol === 17) {
-                const udpStart = 14 + ihl;
-                payloadOffset = udpStart + 8;
-                setPacketInfo({ srcIP, dstIP, protocol: 'UDP', length: pkt.length });
+              const ipVersion = (pkt[ipHeaderStart] >> 4) & 0x0f;
+              
+              if (ipVersion === 4) {
+                const ihl = (pkt[ipHeaderStart] & 0x0f) * 4;
+                
+                // Validate IHL (must be at least 5, i.e., 20 bytes)
+                if (ihl < 20 || ihl > 60 || pkt.length < 14 + ihl) {
+                  console.warn('Invalid IP header length:', ihl);
+                  payloadOffset = 0;
+                } else {
+                  const protocolNum = pkt[ipHeaderStart + 9];
+                  srcIP = Array.from(pkt.slice(ipHeaderStart + 12, ipHeaderStart + 16)).join('.');
+                  dstIP = Array.from(pkt.slice(ipHeaderStart + 16, ipHeaderStart + 20)).join('.');
+                  
+                  if (protocolNum === 6) {
+                    // TCP
+                    if (pkt.length >= 14 + ihl + 20) {
+                      const tcpStart = 14 + ihl;
+                      const dataOffsetRaw = (pkt[tcpStart + 12] & 0xf0) >> 4;
+                      const dataOffset = dataOffsetRaw * 4;
+                      
+                      // Validate TCP data offset (must be at least 5, i.e., 20 bytes)
+                      if (dataOffset < 20 || dataOffset > 60 || pkt.length < 14 + ihl + dataOffset) {
+                        console.warn('Invalid TCP data offset:', dataOffset);
+                        payloadOffset = 14 + ihl + 20; // Fallback to minimum TCP header
+                      } else {
+                        payloadOffset = 14 + ihl + dataOffset;
+                      }
+                      protocol = 'TCP';
+                    } else {
+                      payloadOffset = 14 + ihl;
+                      protocol = 'TCP (incomplete)';
+                    }
+                  } else if (protocolNum === 17) {
+                    // UDP
+                    if (pkt.length >= 14 + ihl + 8) {
+                      payloadOffset = 14 + ihl + 8;
+                      protocol = 'UDP';
+                    } else {
+                      payloadOffset = 14 + ihl;
+                      protocol = 'UDP (incomplete)';
+                    }
+                  } else {
+                    payloadOffset = 14 + ihl;
+                    protocol = `IP/${protocolNum}`;
+                  }
+                }
               } else {
-                payloadOffset = 14 + ihl;
-                setPacketInfo({ srcIP, dstIP, protocol: `IP/${protocol}`, length: pkt.length });
+                payloadOffset = 0;
+                protocol = 'unknown (not IPv4)';
               }
             } else {
               payloadOffset = 0;
-              setPacketInfo({ filename: file.name, length: pkt.length, protocol: 'unknown' });
+              protocol = 'unknown (not IPv4)';
             }
+          } else {
+            payloadOffset = 0;
+            protocol = 'unknown (too short)';
           }
 
           const payload = pkt.slice(payloadOffset);
+          
+          if (payload.length === 0) {
+            console.warn('No payload extracted from PCAP packet');
+            setPacketInfo({ filename: file.name, length: pkt.length, protocol: protocol });
+            return;
+          }
+          
           setPayloadBytes(payload);
           setPayloadHex(Array.from(payload).map(b => b.toString(16).padStart(2, '0')).join(''));
+          
           // Convert bytes to ASCII, preserving HTTP control characters (\r, \n, \t)
           const ascii = Array.from(payload).map(b => {
             if (b >= 32 && b <= 126) return String.fromCharCode(b);
@@ -728,8 +813,17 @@ const MagicBento = ({
             if (b === 9) return '\t'; // TAB
             return '.'; // Other non-printable
           }).join('');
+          
           setPayloadAscii(ascii);
+          
+          if (srcIP && dstIP) {
+            setPacketInfo({ srcIP, dstIP, protocol, length: payload.length });
+          } else {
+            setPacketInfo({ filename: file.name, length: payload.length, protocol });
+          }
           return;
+        } else {
+          console.warn('PCAP file too small to contain packet header');
         }
       }
 
